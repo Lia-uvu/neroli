@@ -1,0 +1,10 @@
+{
+  "_comment": "Single source of truth for rooms. Copy to rooms.json and fill in. A 'room' is one agent's private scope: its cards are invisible to other rooms unless a card carries a 'share' field. Most installs want exactly one room — add more only if you run multiple agents with separate privacy scopes. room_dir: where the engine writes this room's memory files (context-last-24.md, digest.md, constants.md). project_dir: where this room's conversation logs (JSONL) accumulate — for Claude Code that is ~/.claude/projects/<encoded-cwd>/. After editing, restart the watcher if it is running.",
+  "rooms": [
+    {
+      "name": "main",
+      "room_dir": "/ABSOLUTE/PATH/to/agent-home",
+      "project_dir": "/ABSOLUTE/PATH/to/session-logs"
+    }
+  ]
+}

@@ -1,0 +1,116 @@
+{
+  "_comment": "Copy to settings.json and fill in. Changes take effect on next trigger (files are re-read every run) — no restart needed. Keys marked INSTALL are the ones the INSTALL skill interview fills; everything else ships with tuned defaults you can leave alone.",
+  "timezone": "UTC",
+
+  "model_access": {
+    "_comment": "INSTALL. How the whole pipeline reaches models (card gen / entity judge / night curator share this). provider: cli | api | ollama. 'cli' builds a codex exec command by default; to use another headless CLI (e.g. claude -p), set cli_cmd as a template — {model} is replaced with each call site's model name, prompt is fed via stdin. Note the night curator needs an agentic CLI that can write its working directory. 'api' uses CLAUDE_MEMORY_API_BASE_URL / CLAUDE_MEMORY_API_KEY from .env.",
+    "provider": "cli",
+    "cli_cmd": ""
+  },
+
+  "user": {
+    "_comment": "INSTALL. What the agent calls the user. 'name' is injected into prompts via the {username} placeholder and used as the user-side label when rendering conversations. 'aliases' (lowercase) are masked in co-occurrence stats, tree tags, and entity graphs — a name co-occurs with everything, so leaving it in poisons clustering.",
+    "name": "User",
+    "aliases": ["user"]
+  },
+
+  "agent": {
+    "_comment": "INSTALL. Assistant-side label in rendered conversations; aliases join the mask list too.",
+    "name": "Assistant",
+    "aliases": ["assistant"]
+  },
+
+  "vocab": {
+    "_comment": "Extra mask words. generic_extra: appended to the built-in stopword list (add words that dominate YOUR conversations but carry no topical signal). affect: emotion/situation words tuned per person — start empty, harvest later from tags that appear everywhere.",
+    "generic_extra": [],
+    "affect": []
+  },
+
+  "card_gen": {
+    "_comment": "INSTALL: model. Event-card generation. Triggers when a session has >= min_new_turns new turns AND >= min_interval_minutes since its last card call ('short chats are not memorized, new content waits up to an hour'). Sessions shorter than min_first_session_turns never card.",
+    "min_new_turns": 5,
+    "min_interval_minutes": 60,
+    "min_first_session_turns": 4,
+    "max_sessions_per_trigger": 10,
+    "model": "gpt-5.5",
+    "reasoning_effort": "low",
+    "turn_cap": 1600,
+    "init_rounds": 14,
+    "grow_rounds": 14
+  },
+
+  "embedding": {
+    "_comment": "INSTALL. backend 'api' needs CLAUDE_MEMORY_API_BASE_URL + CLAUDE_MEMORY_API_KEY in .env (any OpenAI-compatible /embeddings endpoint); backend 'ollama' runs locally against ollama_url. bge-m3 is the tested default (multilingual).",
+    "backend": "api",
+    "model": "BAAI/bge-m3",
+    "ollama_url": "http://localhost:11434"
+  },
+
+  "index": {
+    "_comment": "Card index: entity graph + recursive Leiden clustering. Tuned defaults; leave alone unless you know why you are changing them. generic_frac: entities on more than this fraction of cards are dropped as background. w_emb/w_cooc: blend weights of the embedding and co-occurrence edge signals. leiden_seed fixed for reproducible hierarchies; a community splits only if Q_obs > mean + split_z*std over null_rewires rewired null models, and never below split_min_size members.",
+    "enabled": true,
+    "algorithm": "leiden",
+    "rebuild_after_cards": true,
+    "knn_k": 12,
+    "resolve_entities": true,
+    "generic_frac": 0.25,
+    "w_emb": 1.0,
+    "w_cooc": 1.0,
+    "leiden_seed": 15,
+    "split_min_size": 8,
+    "null_rewires": 20,
+    "split_z": 2.0
+  },
+
+  "entity_resolve": {
+    "_comment": "Online entity dedup (merge new tags into existing entities). judge_model is called with small batches; failures degrade softly (tag stays unmerged). cosine_min: candidate screen threshold; top_k candidates shown to the judge; min_df: only tags on >= this many cards get resolved; batch: tags per model call.",
+    "judge_model": "gpt-5.4-mini",
+    "cosine_min": 0.6,
+    "top_k": 5,
+    "min_df": 2,
+    "batch": 12
+  },
+
+  "ingest": {
+    "_comment": "fork_min_shared_turns: two sessions sharing >= this many source_uuid rows are treated as a fork. origin_data_dir (optional): archive directory of claude.ai web exports for scripts/ingest_claude_ai_exports.py; leave empty if unused.",
+    "fork_min_shared_turns": 6,
+    "origin_data_dir": ""
+  },
+
+  "backup": {
+    "_comment": "INSTALL. bin/backup-db.sh: destination directory and rolling copy count. Empty dir = backup script refuses to run.",
+    "dir": "",
+    "keep": 14
+  },
+
+  "context": {
+    "lookback_hours": 24,
+    "max_cards": 80
+  },
+
+  "watcher": {
+    "_comment": "Realtime ingest daemon (bin/watch.sh). auto_cards: whether the watcher also triggers card generation after ingest (thresholds still apply). incremental_ingest: only re-read files whose mtime changed plus files sharing a session with them; state in data/ingest-state.json — set false or delete that file to force a full re-read.",
+    "ingest_debounce_seconds": 5,
+    "auto_cards": true,
+    "incremental_ingest": true
+  },
+
+  "nightly": {
+    "_comment": "generate_missing_cards: whether the nightly job cards cold sessions that never hit the daytime thresholds. Off by default: on a freshly backfilled database this would fire model calls for the entire history — turn on only after you have carded what you want.",
+    "generate_missing_cards": false
+  },
+
+  "midlayer": {
+    "_comment": "INSTALL: enabled + model. Night curator: per-room workbench + agent call that maintains a rolling digest and constants. enabled=false switches the whole midlayer off (engine still works: cards/index/context). rooms: per-room override map, e.g. {\"main\": true}; rooms not listed default to true. Safety pin: a room with no fresh cards that night is skipped — no model call. digest_max_chars is the digest budget (submit gate, prompt notice, and disk trim all share it); home_min/split_min are leaf-identity containment thresholds.",
+    "enabled": true,
+    "rooms": {},
+    "model": "gpt-5.5",
+    "reasoning_effort": "low",
+    "timeout_seconds": 900,
+    "snapshot_keep_nights": 14,
+    "constants_lookback_hours": 24,
+    "digest_max_chars": 800,
+    "home_min": 0.5,
+    "split_min": 0.3
+  }
+}

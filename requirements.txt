@@ -1,0 +1,4 @@
+jieba==0.42.1
+numpy==2.4.5
+python-igraph==1.0.0
+leidenalg==0.12.0

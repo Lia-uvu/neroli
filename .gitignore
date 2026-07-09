@@ -1,0 +1,26 @@
+# ── personal deployment data — never committed; the *.example.* files are the templates ──
+.env
+!.env.example
+config/settings.json
+config/rooms.json
+prompts/agent-persona-*.md
+prompts/gen-cards-prompt.md
+prompts/archive/
+docs/design-leiden.html
+docs/archive/
+docs/proposal-*.md
+scripts/archive/
+GIT-MAINTENANCE.local.md
+
+# ── runtime output ──
+data/
+logs/
+reports/
+
+# ── local convenience; rebuild with: pip install -r requirements.txt ──
+vendor/
+
+# ── noise ──
+__pycache__/
+*.py[cod]
+.DS_Store
