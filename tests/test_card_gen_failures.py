@@ -61,11 +61,11 @@ class CardGenFailureSafetyTest(unittest.TestCase):
     def test_unparseable_update_preserves_old_tail_and_audits_raw(self):
         db.ingest_turns(self.conn, _messages(self.sid, 1, 3))
         good = FakeModel([
-            "turns:1-3\ntheme:old tail\nshare:kept fact\nprivate:\ntags:test"
+            "turns:1-3\nheadline:old tail\nshare:kept fact\nprivate:\ntags:test"
         ])
         process_session_cards(self.conn, self._run_id(good), self.sid, good, room="den")
         before = [tuple(r) for r in self.conn.execute(
-            "SELECT card_id, theme FROM cards ORDER BY card_id"
+            "SELECT card_id, headline FROM cards ORDER BY card_id"
         )]
 
         db.ingest_turns(self.conn, _messages(self.sid, 4, 4))
@@ -76,7 +76,7 @@ class CardGenFailureSafetyTest(unittest.TestCase):
         self.conn.rollback()
 
         after = [tuple(r) for r in self.conn.execute(
-            "SELECT card_id, theme FROM cards ORDER BY card_id"
+            "SELECT card_id, headline FROM cards ORDER BY card_id"
         )]
         self.assertEqual(after, before)
         audit = self.conn.execute(
@@ -91,12 +91,12 @@ class CardGenFailureSafetyTest(unittest.TestCase):
     def test_late_window_failure_keeps_earlier_window_audit(self):
         db.ingest_turns(self.conn, _messages(self.sid, 1, 30))
         first = (
-            "turns:1-7\ntheme:a\nshare:a\nprivate:\ntags:a\n\n"
-            "turns:7-14\ntheme:b\nshare:b\nprivate:\ntags:b"
+            "turns:1-7\nheadline:a\nshare:a\nprivate:\ntags:a\n\n"
+            "turns:7-14\nheadline:b\nshare:b\nprivate:\ntags:b"
         )
         second = (
-            "turns:7-20\ntheme:c\nshare:c\nprivate:\ntags:c\n\n"
-            "turns:20-28\ntheme:d\nshare:d\nprivate:\ntags:d"
+            "turns:7-20\nheadline:c\nshare:c\nprivate:\ntags:c\n\n"
+            "turns:20-28\nheadline:d\nshare:d\nprivate:\ntags:d"
         )
         model = FakeModel([first, second, RuntimeError("third window failed")])
         with self.assertRaisesRegex(RuntimeError, "third window failed"):

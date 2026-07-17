@@ -45,7 +45,7 @@ PROMPT_FILE = MEMORY / "prompts" / "night-curator.md"
 _VIEW_SCHEMA = """
 CREATE TABLE cards (
   card_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, turn_start INTEGER, turn_end INTEGER,
-  theme TEXT NOT NULL DEFAULT '', share TEXT NOT NULL DEFAULT '', private TEXT NOT NULL DEFAULT '',
+  headline TEXT NOT NULL DEFAULT '', share TEXT NOT NULL DEFAULT '', private TEXT NOT NULL DEFAULT '',
   timestamp TEXT, room TEXT NOT NULL, model TEXT
 );
 CREATE INDEX cards_time_idx ON cards(timestamp);
@@ -58,7 +58,7 @@ CREATE TABLE clusters (cluster_id TEXT PRIMARY KEY, summary TEXT NOT NULL DEFAUL
 CREATE INDEX clusters_parent_idx ON clusters(parent_cluster_id);
 CREATE TABLE cluster_members (card_id TEXT NOT NULL, cluster_id TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'primary', PRIMARY KEY (card_id, cluster_id));
 CREATE INDEX cluster_members_cluster_idx ON cluster_members(cluster_id);
-CREATE VIRTUAL TABLE cards_fts USING fts5(card_id UNINDEXED, theme, share, private);
+CREATE VIRTUAL TABLE cards_fts USING fts5(card_id UNINDEXED, headline, share, private);
 """
 
 _RECALL_TEMPLATE = '''#!/usr/bin/env python3
@@ -104,7 +104,7 @@ def _conn():
 
 def _detail(d):
     print(f"== {{d.card_id}} ==  {{d.local_time}}  [{{d.room}}]")
-    print(f"theme: {{d.theme}}")
+    print(f"headline: {{d.headline}}")
     if d.share:
         print(f"\\nshare: {{d.share}}")
     if d.private:
@@ -149,7 +149,7 @@ def main():
             for s in sibs:
                 mark = "→" if s.card_id == d.card_id else " "
                 rng = f"R{{s.turn_start}}–R{{s.turn_end}}" if s.turn_start is not None else "R?"
-                print(f"{{mark}} 📄 {{s.card_id}}  {{s.local_time}}  {{rng}}  {{s.theme}}")
+                print(f"{{mark}} 📄 {{s.card_id}}  {{s.local_time}}  {{rng}}  {{s.headline}}")
     elif args.time:
         since = args.time[0]
         until = args.time[1] if len(args.time) > 1 else None
@@ -320,9 +320,9 @@ def _export_view_db(conn: sqlite3.Connection, room: str, dest: Path, db_path: Pa
         # 可见卡；本房卡留 private，他房（shared）卡 private 置空。
         v.execute(
             f"""
-            INSERT INTO cards (card_id, session_id, turn_start, turn_end, theme, share,
+            INSERT INTO cards (card_id, session_id, turn_start, turn_end, headline, share,
                                private, timestamp, room, model)
-            SELECT c.card_id, c.session_id, c.turn_start, c.turn_end, c.theme, c.share,
+            SELECT c.card_id, c.session_id, c.turn_start, c.turn_end, c.headline, c.share,
                    CASE WHEN c.room = ? THEN c.private ELSE '' END,
                    c.timestamp, c.room, c.model
             FROM src.cards c
@@ -339,8 +339,8 @@ def _export_view_db(conn: sqlite3.Connection, room: str, dest: Path, db_path: Pa
         # FTS 按 card_id 拷行（分词现成不重算）；他房 private 同样置空。
         v.execute(
             """
-            INSERT INTO cards_fts (card_id, theme, share, private)
-            SELECT f.card_id, f.theme, f.share,
+            INSERT INTO cards_fts (card_id, headline, share, private)
+            SELECT f.card_id, f.headline, f.share,
                    CASE WHEN c.room = ? THEN f.private ELSE '' END
             FROM src.cards_fts f JOIN cards c ON c.card_id = f.card_id
             """,

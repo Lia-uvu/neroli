@@ -1,6 +1,5 @@
 # Neroli
 Neroli is a memory infrastructure for long-term AI companions, built on graph-based retrieval. It generates memory cards through the agent's own persona rather than neutral extraction. Time is a first-class citizen: cards stay anchored to when things happened, and recent context takes a separate path from long-term structure. The long-term index clusters cards by event into a hierarchical topic tree and presents information at multiple resolutions — agents dynamically choose the level of detail they need at query time. Per-agent privacy boundaries are enforced over a shared archive.
-（*a vedio）
 
 ## How It Works
 [LLMs operate fundamentally through persona simulation](https://www.anthropic.com/research/persona-selection-model), so rather than judging what to remember from the outside, Neroli lets the agent inhabit its own identity and context, and decide for itself what matters. Without access to an LLM's internal runtime state, external memory has a hard ceiling — persona-driven generation is one way to approximate what the agent would natively retain, if it could.
@@ -55,7 +54,7 @@ The system is iterated on agent feedback, so the primary users of the memory are
 ## Documentation
 - [ARCHITECTURE.md](ARCHITECTURE.md) — module map, data flow, boundary rules
 - [skills/ops/SKILL.md](skills/ops/SKILL.md) — operations skill and index ("what do I edit to change X")
-- [schema.md](schema.md) — SQLite schema v7 reference
+- [schema.md](schema.md) — SQLite schema v9 reference
 
 ## FAQ
 **Where does my data go?**

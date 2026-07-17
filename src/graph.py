@@ -38,7 +38,7 @@ W_COOC = _idx.get("w_cooc", 1.0)               # co-occurrence-signal weight in 
 
 def load_cards(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT card_id, theme, share, private FROM cards ORDER BY card_id"
+        "SELECT card_id, headline, share, private FROM cards ORDER BY card_id"
     ).fetchall()
 
 

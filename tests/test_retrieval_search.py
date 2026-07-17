@@ -25,10 +25,10 @@ def _tmp_conn():
     return db.connect(Path(tmp.name)), Path(tmp.name)
 
 
-def _card(card_id, theme="", share="", private="", room="roomA",
+def _card(card_id, headline="", share="", private="", room="roomA",
           ts="2026-07-01T12:00:00+00:00", session="s1", turns=(1, 2), tags=()):
     return {"card_id": card_id, "session_id": session, "turns": list(turns),
-            "theme": theme, "share": share, "private": private,
+            "headline": headline, "share": share, "private": private,
             "timestamp": ts, "room": room, "tags": list(tags)}
 
 
@@ -50,16 +50,16 @@ class SearchTest(unittest.TestCase):
     def setUp(self):
         self.conn, self.path = _tmp_conn()
         db.insert_card(self.conn, _card(
-            "a#1", theme="朋友的生日", share="我们聊了生日和礼物怎么挑", turns=(1, 2)))
+            "a#1", headline="朋友的生日", share="我们聊了生日和礼物怎么挑", turns=(1, 2)))
         db.insert_card(self.conn, _card(
-            "a#2", theme="下午的采购", share="挑了一个礼物", turns=(3, 4)))
+            "a#2", headline="下午的采购", share="挑了一个礼物", turns=(3, 4)))
         db.insert_card(self.conn, _card(
-            "a#3", theme="失眠的一晚", share="翻来覆去睡不着", session="s2",
+            "a#3", headline="失眠的一晚", share="翻来覆去睡不着", session="s2",
             tags=("爷爷生日",)))
         db.insert_card(self.conn, _card(
-            "b#1", theme="别房的私事", private="秘密计划", share="", room="roomB", session="s3"))
+            "b#1", headline="别房的私事", private="秘密计划", share="", room="roomB", session="s3"))
         db.insert_card(self.conn, _card(
-            "b#2", theme="别房的日常", share="有 share 的卡", private="梧桐树下的约定",
+            "b#2", headline="别房的日常", share="有 share 的卡", private="梧桐树下的约定",
             room="roomB", session="s3", turns=(5, 6)))
         self.conn.commit()
 
@@ -76,7 +76,7 @@ class SearchTest(unittest.TestCase):
     def test_body_hit_carries_snippet_reason(self):
         hits = retrieval.search(self.conn, "礼物", viewer="roomA")
         h = next(x for x in hits if x.card_id == "a#1")
-        self.assertIn("礼物", h.why)  # theme 没有"礼物"，片段来自 share
+        self.assertIn("礼物", h.why)  # headline 没有"礼物"，片段来自 share
 
     def test_tag_hit_labeled_with_tag(self):
         hits = retrieval.search(self.conn, "生日礼物", viewer="roomA")
@@ -99,10 +99,10 @@ class SearchTest(unittest.TestCase):
 class SessionSiblingsTest(unittest.TestCase):
     def setUp(self):
         self.conn, self.path = _tmp_conn()
-        db.insert_card(self.conn, _card("a#2", theme="后半场", turns=(3, 4)))
-        db.insert_card(self.conn, _card("a#1", theme="前半场", turns=(1, 2)))
-        db.insert_card(self.conn, _card("b#1", theme="他房无share", share="", room="roomB", session="s3", turns=(1, 2)))
-        db.insert_card(self.conn, _card("b#2", theme="他房有share", share="s", room="roomB", session="s3", turns=(3, 4)))
+        db.insert_card(self.conn, _card("a#2", headline="后半场", turns=(3, 4)))
+        db.insert_card(self.conn, _card("a#1", headline="前半场", turns=(1, 2)))
+        db.insert_card(self.conn, _card("b#1", headline="他房无share", share="", room="roomB", session="s3", turns=(1, 2)))
+        db.insert_card(self.conn, _card("b#2", headline="他房有share", share="s", room="roomB", session="s3", turns=(3, 4)))
         self.conn.commit()
 
     def tearDown(self):
@@ -122,9 +122,9 @@ class SessionSiblingsTest(unittest.TestCase):
 class WanderTest(unittest.TestCase):
     def setUp(self):
         self.conn, self.path = _tmp_conn()
-        db.insert_card(self.conn, _card("old#1", theme="翻过的旧卡", ts="2026-01-01T10:00:00+00:00"))
-        db.insert_card(self.conn, _card("old#2", theme="没翻过的旧卡", ts="2026-01-02T10:00:00+00:00"))
-        db.insert_card(self.conn, _card("new#1", theme="昨天的新卡", ts="2126-01-01T10:00:00+00:00"))
+        db.insert_card(self.conn, _card("old#1", headline="翻过的旧卡", ts="2026-01-01T10:00:00+00:00"))
+        db.insert_card(self.conn, _card("old#2", headline="没翻过的旧卡", ts="2026-01-02T10:00:00+00:00"))
+        db.insert_card(self.conn, _card("new#1", headline="昨天的新卡", ts="2126-01-01T10:00:00+00:00"))
         for _ in range(2):
             self.conn.execute(
                 "INSERT INTO card_access (card_id, viewer, source, ts) VALUES ('old#1','roomA','search','2026-07-01T00:00:00+00:00')")

@@ -1,3 +1,4 @@
+-- schema v9（2026-07-17，事件卡字段 theme 更名为 headline，含 cards_fts）
 -- schema v8（2026-07-11，卡片取用日志 card_access：read-heat，重量用「被重新拿起」度量）
 -- schema v7（2026-07-02，中期层/馆员：树快照 + 近况总结 + constant 篮子）。设计见 docs/proposal-20260702-midlayer-tree-privacy.md。
 -- schema v6（2026-06-28，会话 fork 关系层）
@@ -19,7 +20,7 @@
 -- 暂未含（待设计）：profile 画像注入层；embedding 向量索引。（constant 篮子已在 v7 落表）
 
 PRAGMA journal_mode = WAL;
-PRAGMA user_version = 8;
+PRAGMA user_version = 9;
 
 CREATE TABLE IF NOT EXISTS pipeline_runs (
   id TEXT PRIMARY KEY,
@@ -96,7 +97,7 @@ CREATE TABLE IF NOT EXISTS cards (
   session_id TEXT NOT NULL,
   turn_start INTEGER,
   turn_end   INTEGER,
-  theme      TEXT NOT NULL DEFAULT '',
+  headline   TEXT NOT NULL DEFAULT '',
   share      TEXT NOT NULL DEFAULT '',     -- 全院可见
   private    TEXT NOT NULL DEFAULT '',     -- 仅 room 可见
   timestamp  TEXT,                         -- 原始对话发生时间，唯一时间字段
@@ -162,11 +163,11 @@ CREATE INDEX IF NOT EXISTS cluster_members_card_idx    ON cluster_members(card_i
 CREATE INDEX IF NOT EXISTS cluster_members_cluster_idx ON cluster_members(cluster_id);
 
 -- cards 全文索引（standalone，不 content-sync；Python 侧 jieba 分词后写入）
--- card_id UNINDEXED 用于回连 cards 表；theme/share/private 存 jieba 分词后的文本。
--- audience 过滤：正式关键词检索只搜 {theme share}；private 只在同房间 --card 展示。
+-- card_id UNINDEXED 用于回连 cards 表；headline/share/private 存 jieba 分词后的文本。
+-- audience 过滤：正式关键词检索只搜 {headline share}；private 只在同房间 --card 展示。
 CREATE VIRTUAL TABLE IF NOT EXISTS cards_fts USING fts5(
   card_id UNINDEXED,
-  theme, share, private
+  headline, share, private
 );
 
 -- 中期层（馆员 / Midlayer，v7 2026-07-02）：夜间树快照 + 近况总结 + constant 篮子。

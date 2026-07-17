@@ -12,7 +12,7 @@ class ParseCardsTest(unittest.TestCase):
     def test_empty_share_with_markdown_linebreak_stays_empty(self):
         text = (
             "turns:23-35  \n"
-            "theme: 亲吻变得更亲密。  \n"
+            "headline: 亲吻变得更亲密。  \n"
             "share:  \n"
             "private: 只该在 private 里的正文。  \n"
             "tags:后颈/亲吻"
@@ -27,7 +27,7 @@ class ParseCardsTest(unittest.TestCase):
     def test_empty_private_with_markdown_linebreak_does_not_capture_tags(self):
         text = (
             "turns:12-14  \n"
-            "theme: Amy 打了一会儿 FF14。  \n"
+            "headline: Amy 打了一会儿 FF14。  \n"
             "share: 普通事实。  \n"
             "private:  \n"
             "tags:FF14/休息"

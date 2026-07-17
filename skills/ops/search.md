@@ -32,7 +32,7 @@ python3 src/retrieval.py --viewer secondary 关键词
 
 - `关键词 --expand N`：搜完自动展开前 N 条命中全文（每张计一笔 card_access）。
 - `--card ID --around`：列同 session 全部卡（turn 区间＋当前卡标记），可见性同 card_visible_clause。
-- `关键词 --sem`：向量语义检索（`retrieval.semantic_search`）。卡片向量只读 `.emb_cache`（Leiden 建树产物），query 向量缺缓存时打一次 embedding API（settings.embedding）。**隐私**：同房间用全文向量；跨房间只用 theme+share 向量——share 向量由 `scripts/backfill_share_vecs.py` 预热（幂等，新卡出现后需重跑；尚未挂 nightly），缺向量的卡静默跳过。
+- `关键词 --sem`：向量语义检索（`retrieval.semantic_search`）。卡片向量只读 `.emb_cache`（Leiden 建树产物），query 向量缺缓存时打一次 embedding API（settings.embedding）。**隐私**：同房间用全文向量；跨房间只用 headline+share 向量——share 向量由 `scripts/backfill_share_vecs.py` 预热（幂等，新卡出现后需重跑；尚未挂 nightly），缺向量的卡静默跳过。
 
 ## 匹配语义（2026-07-15 起）
 
@@ -40,6 +40,6 @@ python3 src/retrieval.py --viewer secondary 关键词
 
 ## 隐私边界
 
-关键词检索的匹配范围（2026-07-15 起）三路合并：`{theme share}` 对全部可见卡；`{private}` 只对与 viewer 同房间的卡参与匹配（跨房间照旧不进匹配范围）；tags 走 `card_tags` 子串匹配、排在 FTS 命中后。`private` 全文仅在 `--card` 且 viewer 与 `cards.room` 相同时展示；`--turns` 原文（完整 transcript，隐私等级高于 share）同样仅限同房间。详见 [schema.md](../../schema.md) 的 `cards_fts` 一节。
+关键词检索的匹配范围（2026-07-15 起）三路合并：`{headline share}` 对全部可见卡；`{private}` 只对与 viewer 同房间的卡参与匹配（跨房间照旧不进匹配范围）；tags 走 `card_tags` 子串匹配、排在 FTS 命中后。`private` 全文仅在 `--card` 且 viewer 与 `cards.room` 相同时展示；`--turns` 原文（完整 transcript，隐私等级高于 share）同样仅限同房间。详见 [schema.md](../../schema.md) 的 `cards_fts` 一节。
 
-已知边界（既有设计，非 bug）：tags 可能由 private 内容生成，而 tags 跨房间可见——跨房间关键词可经 tag 命中一张 private-only 内容的卡的 theme。要收紧需改 card_detail 与 search 的 tag 路径。
+已知边界（既有设计，非 bug）：tags 可能由 private 内容生成，而 tags 跨房间可见——跨房间关键词可经 tag 命中一张 private-only 内容的卡的 headline。要收紧需改 card_detail 与 search 的 tag 路径。

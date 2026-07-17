@@ -62,13 +62,13 @@ def _sample_messages(session_id: str, ts: str) -> list[Message]:
 
 CARD_OUTPUT = (
     "turns:1-1\n"
-    "theme: 讨论用 Leiden 聚类事件卡\n"
+    "headline: 讨论用 Leiden 聚类事件卡\n"
     "share: 决定用 Leiden 社区检测聚类\n"
     "private:\n"
     "tags:Leiden/聚类\n"
     "\n"
     "turns:2-2\n"
-    "theme: 选 bge-m3 做 embedding\n"
+    "headline: 选 bge-m3 做 embedding\n"
     "share: 用 bge-m3 建 kNN 图\n"
     "private:\n"
     "tags:bge-m3/embedding\n"
@@ -115,19 +115,19 @@ class SmokePipelineTest(unittest.TestCase):
         self.assertEqual(len(model.prompts), 1)  # 2 rounds -> single window call
 
         cards = conn.execute(
-            "SELECT card_id, theme, share, private FROM cards ORDER BY card_id"
+            "SELECT card_id, headline, share, private FROM cards ORDER BY card_id"
         ).fetchall()
         self.assertEqual(len(cards), 2)
-        themes = {c["theme"] for c in cards}
-        self.assertIn("讨论用 Leiden 聚类事件卡", themes)
-        self.assertIn("选 bge-m3 做 embedding", themes)
+        headlines = {c["headline"] for c in cards}
+        self.assertIn("讨论用 Leiden 聚类事件卡", headlines)
+        self.assertIn("选 bge-m3 做 embedding", headlines)
 
         tags = {r["tag"] for r in conn.execute("SELECT tag FROM card_tags").fetchall()}
         self.assertEqual(tags, {"leiden", "聚类", "bge-m3", "embedding"})
 
         # --- FTS search（生产检索路径：retrieval.search，非 db 旧口） ---
         hits = retrieval.search(conn, "Leiden", viewer="room")
-        self.assertTrue(any("Leiden" in h.theme for h in hits))
+        self.assertTrue(any("Leiden" in h.headline for h in hits))
 
         # --- context rebuild (into temp room dir) ---
         context.rebuild_context(conn)

@@ -92,14 +92,14 @@ def parse_cards(text: str) -> list[dict]:
 
         def field(name, blk=block):
             mm = re.search(
-                rf"(?mi)^[ \t]*{name}[ \t]*[:：][ \t]*(.*?)(?=\n[ \t]*(?:theme|share|private|tags|turns?)[ \t]*[:：]|\Z)",
+                rf"(?mi)^[ \t]*{name}[ \t]*[:：][ \t]*(.*?)(?=\n[ \t]*(?:headline|share|private|tags|turns?)[ \t]*[:：]|\Z)",
                 blk, re.S,
             )
             return mm.group(1).strip() if mm else ""
 
         cards.append({
             "turns": [lo, hi],
-            "theme": field("theme"),
+            "headline": field("headline"),
             "share": field("share"),
             "private": field("private"),
             "tags": [t for t in re.split(r"[/、,，\s]+", field("tags")) if t],
@@ -382,7 +382,7 @@ def _rows_to_card_dicts(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> li
             "card_id": r["card_id"],
             "session_id": r["session_id"],
             "turns": [r["turn_start"], r["turn_end"]],
-            "theme": r["theme"] or "",
+            "headline": r["headline"] or "",
             "share": r["share"] or "",
             "private": r["private"] or "",
             "tags": [t["tag"] for t in tags_rows],

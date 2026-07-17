@@ -37,7 +37,7 @@ def rebuild_context_for(conn: sqlite3.Connection, viewer: str) -> None:
     visible_clause, visible_params = card_visible_clause(viewer, "cards")
     rows = conn.execute(
         f"""
-        SELECT card_id, session_id, turn_start, turn_end, theme, share, private, timestamp, room
+        SELECT card_id, session_id, turn_start, turn_end, headline, share, private, timestamp, room
         FROM cards
         WHERE timestamp >= ?
           AND {visible_clause}
@@ -61,7 +61,7 @@ def rebuild_context_for(conn: sqlite3.Connection, viewer: str) -> None:
             lines.append("")
             today_tag = "（今天）" if date_str == today else ""
             lines.append(f"--{date_str}{today_tag}--")
-        content = row["theme"]
+        content = row["headline"]
         room_tag = f" [{row['room']}]" if row["room"] != room else ""
         lines.append(f"- {time_str} {content}{room_tag} ·{row['card_id']}")
     path = context_path_for(viewer)

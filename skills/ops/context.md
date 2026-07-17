@@ -22,6 +22,6 @@ bin/cli.py --rebuild-context --context-room main
 | 参数 | 默认 | 说明 |
 |------|------|------|
 | `lookback_hours` | 24 | context 窗口时长 |
-| `max_cards` | 80 | context 最多显示几张卡；只写 theme，不写 share/private 正文 |
+| `max_cards` | 80 | context 最多显示几张卡；只写 headline，不写 share/private 正文 |
 
-跨房间可见性：context 只展示 `theme`；某卡 `room != viewer` 时带 `[room]` 标记，且只在该卡 `share` 非空时才跨房间出现（private-only 卡不跨房间）。
+跨房间可见性：context 只展示 `headline`；某卡 `room != viewer` 时带 `[room]` 标记，且只在该卡 `share` 非空时才跨房间出现（private-only 卡不跨房间）。

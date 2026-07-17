@@ -36,7 +36,7 @@ class Card:
     timestamp: str
     local_time: str
     room: str
-    theme: str
+    headline: str
     source_count: int
     source_files: list[str]
     signature: list[str]
@@ -67,7 +67,7 @@ def local_time(value: str | None) -> str:
 def load_cards(conn: sqlite3.Connection, claude_code_only: bool) -> list[Card]:
     rows = conn.execute(
         """
-        SELECT card_id, session_id, turn_start, turn_end, timestamp, room, theme
+        SELECT card_id, session_id, turn_start, turn_end, timestamp, room, headline
         FROM cards
         ORDER BY timestamp DESC, card_id
         """
@@ -99,7 +99,7 @@ def load_cards(conn: sqlite3.Connection, claude_code_only: bool) -> list[Card]:
             timestamp=row["timestamp"] or "",
             local_time=local_time(row["timestamp"]),
             room=row["room"] or "",
-            theme=row["theme"] or "",
+            headline=row["headline"] or "",
             source_count=len(signature),
             source_files=source_files,
             signature=signature,
@@ -193,7 +193,7 @@ def write_markdown(path: Path, groups: list[list[Card]], threshold: float) -> No
             source_hint = Path(card.source_files[0]).name if card.source_files else ""
             turn_range = f"{card.turn_start}-{card.turn_end}"
             lines.append(f"- [ ] `{card.card_id}` `{card.session_id[:8]}` R{turn_range} {card.local_time} `{card.room}`")
-            lines.append(f"  theme: {card.theme}")
+            lines.append(f"  headline: {card.headline}")
             lines.append(f"  source: `{source_hint}`")
         lines.append("")
     path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")

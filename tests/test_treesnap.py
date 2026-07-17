@@ -81,11 +81,11 @@ class DiffEventsTest(unittest.TestCase):
 
     def test_dissolved_stale_leaf_absent_from_report(self):
         # 老叶 O（全是一周前的卡）被重聚类打散成 X/Y，另有一张新卡自成叶 Z。
-        # 新卡驱动的报告：只有 Z 上事件区，X/Y 的旧卡 theme 不得出现，打散记一处「拓扑重排」。
+        # 新卡驱动的报告：只有 Z 上事件区，X/Y 的旧卡 headline 不得出现，打散记一处「拓扑重排」。
         conn, path = _tmp_conn()
         try:
             old_ts, fresh_ts = "2026-06-24T12:00:00+00:00", "2026-07-03T09:00:00+00:00"
-            for cid, ts, theme in [
+            for cid, ts, headline in [
                 ("o1", old_ts, "妈第一次去医院"),
                 ("o2", old_ts, "妈复诊肾科"),
                 ("o3", old_ts, "陪护排班"),
@@ -93,8 +93,8 @@ class DiffEventsTest(unittest.TestCase):
                 ("f1", fresh_ts, "FF14 7.4 上线笔记"),
             ]:
                 conn.execute(
-                    "INSERT INTO cards (card_id, session_id, theme, timestamp, room) VALUES (?, 's', ?, ?, 'room')",
-                    (cid, theme, ts),
+                    "INSERT INTO cards (card_id, session_id, headline, timestamp, room) VALUES (?, 's', ?, ?, 'room')",
+                    (cid, headline, ts),
                 )
             _put_snapshot(conn, "2026-06-25", {"O": ["o1", "o2", "o3", "o4"]})
             _put_snapshot(conn, "2026-07-03", {
@@ -104,7 +104,7 @@ class DiffEventsTest(unittest.TestCase):
             })
             report = treesnap.render_report(conn, night="2026-07-03")
 
-            self.assertNotIn("医院", report)      # 旧卡 theme 被 fresh 闸挡掉
+            self.assertNotIn("医院", report)      # 旧卡 headline 被 fresh 闸挡掉
             self.assertNotIn("肾科", report)
             self.assertIn("FF14 7.4 上线笔记", report)  # 唯一有新卡的线，样例是新卡
             self.assertIn("+1卡", report)
@@ -122,7 +122,7 @@ class SnapshotPruneTest(unittest.TestCase):
             conn.execute("INSERT INTO clusters (cluster_id, summary, parent_cluster_id, level) VALUES ('c2','y','c1',2)")
             for card_id in ("k1", "k2", "k3"):
                 conn.execute(
-                    "INSERT INTO cards (card_id, session_id, theme, room) VALUES (?, 's', 't', 'room')",
+                    "INSERT INTO cards (card_id, session_id, headline, room) VALUES (?, 's', 't', 'room')",
                     (card_id,),
                 )
                 conn.execute("INSERT INTO cluster_members (card_id, cluster_id, role) VALUES (?, 'c2', 'primary')", (card_id,))
@@ -166,7 +166,7 @@ class VisibleClauseTest(unittest.TestCase):
             ]
             for cid, room, share in rows:
                 conn.execute(
-                    "INSERT INTO cards (card_id, session_id, theme, share, room) VALUES (?, 's', 't', ?, ?)",
+                    "INSERT INTO cards (card_id, session_id, headline, share, room) VALUES (?, 's', 't', ?, ?)",
                     (cid, share, room),
                 )
             conn.commit()

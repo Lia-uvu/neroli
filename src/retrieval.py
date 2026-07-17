@@ -5,12 +5,12 @@
 / cards / cards_fts 的 SQL。索引怎么建（graph / community）、tag 怎么洗
 （entity_resolve）都在别处——本模块只读它们的产物。换存储 / 换算法都不影响调用方。
 
-隐私：viewer 是 room。跨房间只给 theme + share，private 仅同房间可见；
-如果一张卡没有 share，则跨房间连 theme 也不可见
+隐私：viewer 是 room。跨房间只给 headline + share，private 仅同房间可见；
+如果一张卡没有 share，则跨房间连 headline 也不可见
 （对齐 rebuild_context 的约定）。viewer=None 表示不过滤（内部 / 维护用途）。
 
 三级展开：top_communities() → children() 往下钻 → timeline() 看某社区的时间倒序
-theme 流 → card_detail() 看单卡全文。内部社区的 timeline 自动递归收集后代叶子。
+headline 流 → card_detail() 看单卡全文。内部社区的 timeline 自动递归收集后代叶子。
 
 唯一的写例外（v8）：CLI 的 --card 展开会往 card_access 记一笔取用日志——列表扫过
 不算，展开全文才算，treesnap 聚合成取用热喂 curator。只在 _main 里发生，库函数
@@ -44,7 +44,7 @@ class Community:
 class CardRef:
     card_id: str
     timestamp: str | None
-    theme: str
+    headline: str
     room: str
     why: str = ""        # 检索命中原因：上下文片段或 "tag: xxx"（timeline 等场景为空）
 
@@ -59,7 +59,7 @@ class CardDetail:
     session_id: str
     timestamp: str | None
     room: str
-    theme: str
+    headline: str
     share: str
     private: str         # 跨房间时为空（隐私过滤后）
     tags: list[str]
@@ -149,7 +149,7 @@ def timeline(
     since: str | None = None,
     until: str | None = None,
 ) -> list[CardRef]:
-    """某社区（叶或内部）所有卡片的时间倒序 theme 流。内部社区自动递归收叶。"""
+    """某社区（叶或内部）所有卡片的时间倒序 headline 流。内部社区自动递归收叶。"""
     ids = _subtree_ids(conn, cluster_id)
     ph = ",".join("?" for _ in ids)
     clauses = [f"cm.role='primary'", f"cm.cluster_id IN ({ph})"]
@@ -164,7 +164,7 @@ def timeline(
     clauses.append(visible_clause)
     params.extend(visible_params)
     sql = f"""
-        SELECT DISTINCT c.card_id, c.timestamp, c.theme, c.room
+        SELECT DISTINCT c.card_id, c.timestamp, c.headline, c.room
         FROM cluster_members cm JOIN cards c ON c.card_id = cm.card_id
         WHERE {' AND '.join(clauses)}
         ORDER BY c.timestamp DESC
@@ -173,13 +173,13 @@ def timeline(
         sql += " LIMIT ?"
         params.append(limit)
     rows = conn.execute(sql, params).fetchall()
-    return [CardRef(r["card_id"], r["timestamp"], r["theme"], r["room"]) for r in rows]
+    return [CardRef(r["card_id"], r["timestamp"], r["headline"], r["room"]) for r in rows]
 
 
 def card_detail(conn: sqlite3.Connection, card_id: str, viewer: str | None = None) -> CardDetail | None:
     """单卡全文。private 仅同房间可见（viewer=None 不过滤）。"""
     c = conn.execute(
-        "SELECT card_id, session_id, timestamp, room, theme, share, private, turn_start, turn_end"
+        "SELECT card_id, session_id, timestamp, room, headline, share, private, turn_start, turn_end"
         " FROM cards WHERE card_id = ?",
         (card_id,),
     ).fetchone()
@@ -196,7 +196,7 @@ def card_detail(conn: sqlite3.Connection, card_id: str, viewer: str | None = Non
         private = ""  # 跨房间：private 不可见
     return CardDetail(
         card_id=c["card_id"], session_id=c["session_id"], timestamp=c["timestamp"],
-        room=c["room"], theme=c["theme"] or "", share=c["share"] or "",
+        room=c["room"], headline=c["headline"] or "", share=c["share"] or "",
         private=private, tags=tags,
         turn_start=c["turn_start"], turn_end=c["turn_end"],
     )
@@ -280,7 +280,7 @@ def search(
     整卡漏掉）。每条 FTS 命中带 snippet 上下文，标在 CardRef.why 上——看得见
     是哪句话命中的，不用逐卡展开验证。
 
-    隐私分路不变：theme+share 对所有可见卡匹配；private 只对 viewer 同房间的
+    隐私分路不变：headline+share 对所有可见卡匹配；private 只对 viewer 同房间的
     卡参与匹配，跨房间不进匹配范围、不泄露；FTS5 一条查询只允许一个 MATCH，
     两路分开查再合并。tags 走 card_tags 子串匹配，排在最后，why 标明命中的 tag
     （之前 tag 命中混在结果里看不出所以然，"生日" 拉出一堆挂着 "爷爷生日" tag
@@ -310,7 +310,7 @@ def search(
         params = [match_expr, *extra_params, *time_params, limit]
         return conn.execute(
             f"""
-            SELECT c.card_id, c.timestamp, c.theme, c.room, bm25(cards_fts) AS rank,
+            SELECT c.card_id, c.timestamp, c.headline, c.room, bm25(cards_fts) AS rank,
                    snippet(cards_fts, -1, '【', '】', '…', 8) AS snip
             FROM cards_fts f JOIN cards c ON c.card_id = f.card_id
             WHERE {' AND '.join(clauses)}
@@ -323,8 +323,8 @@ def search(
     visible_clause, visible_params = card_visible_clause(viewer, "c")
 
     def _both_routes(expr: str) -> list[sqlite3.Row]:
-        # 一路：theme + share，全部可见卡；二路：private，仅同房间（viewer=None 不过滤）
-        rows = _fts(f"{{theme share}} : ({expr})", [visible_clause], list(visible_params))
+        # 一路：headline + share，全部可见卡；二路：private，仅同房间（viewer=None 不过滤）
+        rows = _fts(f"{{headline share}} : ({expr})", [visible_clause], list(visible_params))
         if viewer_room is not None:
             rows += _fts(f"{{private}} : ({expr})", ["c.room = ?"], [viewer_room])
         else:
@@ -350,10 +350,10 @@ def search(
     out: list[CardRef] = []
     for r in ordered[:limit]:
         snip = _clean_snip(r["snip"] or "")
-        # 命中落在 theme 里时片段和主行重复，不再单列
-        if snip.replace("【", "").replace("】", "").strip("…") in (r["theme"] or ""):
+        # 命中落在 headline 里时片段和主行重复，不再单列
+        if snip.replace("【", "").replace("】", "").strip("…") in (r["headline"] or ""):
             snip = ""
-        out.append(CardRef(r["card_id"], r["timestamp"], r["theme"], r["room"], why=snip))
+        out.append(CardRef(r["card_id"], r["timestamp"], r["headline"], r["room"], why=snip))
 
     # tag 路：子串匹配（原查询串 + 长度≥2 的平铺词，含子词），排在最后
     terms = {query.strip()} | {t for t in flat_tokens if len(t) >= 2}
@@ -362,7 +362,7 @@ def search(
         tag_like = " OR ".join("t.tag LIKE ?" for _ in terms)
         rows = conn.execute(
             f"""
-            SELECT c.card_id, c.timestamp, c.theme, c.room,
+            SELECT c.card_id, c.timestamp, c.headline, c.room,
                    group_concat(t.tag, '、') AS hit_tags
             FROM card_tags t JOIN cards c ON c.card_id = t.card_id
             WHERE ({tag_like}) AND {visible_clause}
@@ -374,7 +374,7 @@ def search(
             [f"%{t}%" for t in terms] + list(visible_params) + time_params + [limit],
         ).fetchall()
         out += [
-            CardRef(r["card_id"], r["timestamp"], r["theme"], r["room"],
+            CardRef(r["card_id"], r["timestamp"], r["headline"], r["room"],
                     why=f"tag: {r['hit_tags']}")
             for r in rows if r["card_id"] not in seen
         ][: limit - len(out)]
@@ -396,7 +396,7 @@ def semantic_search(
     query 向量缺缓存时打一次 API（settings.embedding 的 backend/model）。
 
     隐私与关键词路径同一条规则：同房间卡用全文向量（含 private）；跨房间卡只用
-    theme+share 向量参与匹配——全文向量含 private，不能拿去跨房间排序，否则
+    headline+share 向量参与匹配——全文向量含 private，不能拿去跨房间排序，否则
     排名本身就在泄露 private 的内容。share 向量由 scripts/backfill_share_vecs.py
     预热，缺的卡静默跳过。
     """
@@ -421,7 +421,7 @@ def semantic_search(
     clauses.append(visible_clause)
     params.extend(visible_params)
     rows = conn.execute(
-        f"SELECT card_id, timestamp, theme, share, private, room FROM cards WHERE {' AND '.join(clauses)}",
+        f"SELECT card_id, timestamp, headline, share, private, room FROM cards WHERE {' AND '.join(clauses)}",
         params,
     ).fetchall()
 
@@ -431,7 +431,7 @@ def semantic_search(
         if viewer_room is None or c["room"] == viewer_room:
             text = card_text(c)
         else:
-            text = "\n".join(p for p in [c["theme"] or "", c["share"] or ""] if p).strip()
+            text = "\n".join(p for p in [c["headline"] or "", c["share"] or ""] if p).strip()
         if not text:
             continue
         ck = _cache_key(backend, model, text)
@@ -440,7 +440,7 @@ def semantic_search(
         scored.append((cosine(qvec, json.loads(ck.read_text())), c))
     scored.sort(key=lambda t: -t[0])
     return [
-        CardRef(c["card_id"], c["timestamp"], c["theme"], c["room"], why=f"语义相似 {s:.2f}")
+        CardRef(c["card_id"], c["timestamp"], c["headline"], c["room"], why=f"语义相似 {s:.2f}")
         for s, c in scored[:limit]
     ]
 
@@ -476,7 +476,7 @@ def wander(conn: sqlite3.Connection, limit: int = 3, viewer: str | None = None) 
     visible_clause, visible_params = card_visible_clause(viewer, "c")
     rows = conn.execute(
         f"""
-        SELECT c.card_id, c.timestamp, c.theme, c.room, COALESCE(a.n, 0) AS n_access
+        SELECT c.card_id, c.timestamp, c.headline, c.room, COALESCE(a.n, 0) AS n_access
         FROM cards c
         LEFT JOIN (SELECT card_id, COUNT(*) AS n FROM card_access GROUP BY card_id) a
           ON a.card_id = c.card_id
@@ -487,7 +487,7 @@ def wander(conn: sqlite3.Connection, limit: int = 3, viewer: str | None = None) 
         [*visible_params, limit],
     ).fetchall()
     return [
-        CardRef(r["card_id"], r["timestamp"], r["theme"], r["room"],
+        CardRef(r["card_id"], r["timestamp"], r["headline"], r["room"],
                 why="还没翻过" if r["n_access"] == 0 else f"翻过 {r['n_access']} 次")
         for r in rows
     ]
@@ -514,13 +514,13 @@ def recent(
     params.append(limit)
     rows = conn.execute(
         f"""
-        SELECT card_id, timestamp, theme, room FROM cards
+        SELECT card_id, timestamp, headline, room FROM cards
         WHERE {' AND '.join(clauses)}
         ORDER BY timestamp DESC LIMIT ?
         """,
         params,
     ).fetchall()
-    return [CardRef(r["card_id"], r["timestamp"], r["theme"], r["room"]) for r in rows]
+    return [CardRef(r["card_id"], r["timestamp"], r["headline"], r["room"]) for r in rows]
 
 
 def _print_communities(rows: list[Community]) -> None:
@@ -532,7 +532,7 @@ def _print_communities(rows: list[Community]) -> None:
 
 def _print_cards(rows: list[CardRef]) -> None:
     for r in rows:
-        print(f"📄 {r.card_id}  {r.local_time}  [{r.room}] {r.theme}")
+        print(f"📄 {r.card_id}  {r.local_time}  [{r.room}] {r.headline}")
         if r.why:
             print(f"    ⌙ {r.why}")
 
@@ -549,7 +549,7 @@ def _log_access(conn: sqlite3.Connection, card_id: str, viewer: str | None) -> N
 
 def _print_card_detail(conn: sqlite3.Connection, d: CardDetail, viewer: str | None, show_turns: bool) -> None:
     print(f"== {d.card_id} ==  {d.local_time}  [{d.room}]")
-    print(f"theme: {d.theme}")
+    print(f"headline: {d.headline}")
     if d.share:
         print(f"\nshare: {d.share}")
     if d.private:
@@ -616,7 +616,7 @@ def _main() -> None:
             for s in sibs:
                 mark = "→" if s.card_id == d.card_id else " "
                 rng = f"R{s.turn_start}–R{s.turn_end}" if s.turn_start is not None else "R?"
-                print(f"{mark} 📄 {s.card_id}  {s.local_time}  {rng}  {s.theme}")
+                print(f"{mark} 📄 {s.card_id}  {s.local_time}  {rng}  {s.headline}")
     elif args.wander is not None:
         _print_cards(wander(conn, limit=args.wander, viewer=args.viewer))
     elif args.time:

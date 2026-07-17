@@ -20,7 +20,7 @@ import jieba  # type: ignore
 if hasattr(jieba, "setLogLevel"):  # 工作台的 jieba 兜底 mock 没有这方法
     jieba.setLogLevel(60)  # 静音 "Building prefix dict..."——检索是 agent 在用，噪音会混进每次输出
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 DB = MEMORY / "data" / "fragments.db"
 SCHEMA = MEMORY / "config" / "schema.sql"
@@ -391,7 +391,7 @@ def insert_card(
     conn.execute(
         """
         INSERT OR REPLACE INTO cards
-        (card_id, session_id, turn_start, turn_end, theme, share, private, timestamp, room, model)
+        (card_id, session_id, turn_start, turn_end, headline, share, private, timestamp, room, model)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
@@ -399,7 +399,7 @@ def insert_card(
             card.get("session_id", ""),
             card.get("turns", [None, None])[0],
             card.get("turns", [None, None])[1],
-            card.get("theme", ""),
+            card.get("headline", ""),
             card.get("share", ""),
             card.get("private", ""),
             card.get("timestamp"),
@@ -423,10 +423,10 @@ def insert_card(
     )
     conn.execute("DELETE FROM cards_fts WHERE card_id = ?", (card["card_id"],))
     conn.execute(
-        "INSERT INTO cards_fts (card_id, theme, share, private) VALUES (?, ?, ?, ?)",
+        "INSERT INTO cards_fts (card_id, headline, share, private) VALUES (?, ?, ?, ?)",
         (
             card["card_id"],
-            _jieba_seg(card.get("theme", "")),
+            _jieba_seg(card.get("headline", "")),
             _jieba_seg(card.get("share", "")),
             _jieba_seg(card.get("private", "")),
         ),

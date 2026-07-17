@@ -300,16 +300,16 @@ def _visible_label(conn: sqlite3.Connection, card_ids: list[str], topn: int = 4)
     return " ".join(f"{r['ent']}({r['c']})" for r in rows) or "(无实体)"
 
 
-def _card_themes(conn: sqlite3.Connection, card_ids: list[str], limit: int = 3) -> list[str]:
-    """取若干卡的 theme 作样例，**保持传入顺序**（调用方已按时间倒序、按 viewer 过滤）。"""
+def _card_headlines(conn: sqlite3.Connection, card_ids: list[str], limit: int = 3) -> list[str]:
+    """取若干卡的 headline 作样例，**保持传入顺序**（调用方已按时间倒序、按 viewer 过滤）。"""
     if not card_ids:
         return []
     sample = card_ids[:limit]
     ph = ",".join("?" for _ in sample)
     rows = conn.execute(
-        f"SELECT card_id, theme FROM cards WHERE card_id IN ({ph})", sample
+        f"SELECT card_id, headline FROM cards WHERE card_id IN ({ph})", sample
     ).fetchall()
-    by = {r["card_id"]: r["theme"] for r in rows}
+    by = {r["card_id"]: r["headline"] for r in rows}
     return [by[cid] for cid in sample if by.get(cid)]
 
 
@@ -386,13 +386,13 @@ def render_report(conn: sqlite3.Connection, night: str | None = None,
         rows.append((
             len(fresh), n, _visible_label(conn, all_vis), len(all_vis),
             _lineage_note(lin.get(n, [])),
-            "；".join(_card_themes(conn, [cid for cid, _ in fresh], limit=2)),
+            "；".join(_card_headlines(conn, [cid for cid, _ in fresh], limit=2)),
         ))
     rows.sort(key=lambda r: r[0], reverse=True)
-    for cnt, n, label, total, note, themes in rows:
+    for cnt, n, label, total, note, headlines in rows:
         lines.append(f"  {n} [{label}]  +{cnt}卡（共{total}卡）  {note}")
-        if themes:
-            lines.append(f"        新卡样例：{themes}")
+        if headlines:
+            lines.append(f"        新卡样例：{headlines}")
     if not rows:
         lines.append("  （无新卡）")
 
@@ -406,8 +406,8 @@ def render_report(conn: sqlite3.Connection, night: str | None = None,
             lines.append("本期被重新取用的卡（↻次数，含哪些房间在翻）：")
             for n_read, c in acc_rows:
                 by = "、".join(f"{room}×{n}" for room, n in sorted(acc[c][1].items()))
-                theme = (_card_themes(conn, [c], limit=1) or ["—"])[0]
-                lines.append(f"  {c} ↻{n_read}（{by}）  {theme[:48]}")
+                headline = (_card_headlines(conn, [c], limit=1) or ["—"])[0]
+                lines.append(f"  {c} ↻{n_read}（{by}）  {headline[:48]}")
 
     reshuffle = _reshuffle_count(lin, fresh_by_n)
     if reshuffle:

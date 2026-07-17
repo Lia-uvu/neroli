@@ -37,7 +37,7 @@ STOP = stop_tags()
 
 
 def card_text(c: dict | sqlite3.Row) -> str:
-    parts = [c["theme"] or "", c["share"] or "", c["private"] or ""]
+    parts = [c["headline"] or "", c["share"] or "", c["private"] or ""]
     return "\n".join(p for p in parts if p).strip()
 
 

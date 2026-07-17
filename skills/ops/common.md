@@ -125,7 +125,7 @@ recall-pipeline/
 │   └── ops/                # 按模块拆的运维 Skill（本目录）
 │       └── SKILL.md        # 运维 Skill 入口 + 索引
 ├── data/
-│   ├── fragments.db        # 生产库（schema v7）
+│   ├── fragments.db        # 生产库（schema v9）
 │   ├── backups/ .emb_cache/ watch.log nightly.log
 ├── migrations/             # 002…007-midlayer.sql
 ├── tests/                  # 本地回归测试；公开库不带

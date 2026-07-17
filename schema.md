@@ -1,8 +1,8 @@
-# recall-pipeline 表结构（schema v8）
+# recall-pipeline 表结构（schema v9）
 
 > 改 db.py 或 schema.sql 时查这个。
 >
-> **版本机制**：`PRAGMA user_version = 7`。connect() 只校验版本不做迁移；
+> **版本机制**：`PRAGMA user_version = 9`。connect() 只校验版本不做迁移；
 > 升级写 `migrations/NNN-*.sql`（手动 `sqlite3 db < 迁移文件`），并同步 schema.sql 和本文档。
 
 ## 原始层（v4：内容与发生分离）
@@ -65,7 +65,7 @@ ingest 必须读完整文件（round 跨文件一次算），`--max-messages` �
 | card_id | PK，格式 `session前缀#序号` |
 | session_id | 所属会话 |
 | turn_start / turn_end | 覆盖的轮次范围 |
-| theme | 一句话主题（全院可见） |
+| headline | 一句话主题（全院可见） |
 | share | 共享记忆正文 |
 | private | 房间私有记忆正文 |
 | timestamp | 原始对话发生时间 |
@@ -116,12 +116,12 @@ ingest 必须读完整文件（round 跨文件一次算），`--max-messages` �
 | 字段 | 说明 |
 |------|------|
 | card_id | UNINDEXED，回连 cards |
-| theme | jieba 分词后的 theme |
+| headline | jieba 分词后的 headline |
 | share | jieba 分词后的 share |
 | private | jieba 分词后的 private |
 
-当前正式检索只搜 `{theme share}`，不搜 `private`，以保证关键词入口跨房间安全。
-`private` 仅在 `--card` 且 viewer 与 `cards.room` 相同时展示。Python 侧写入和查询都先过 jieba。Last24 热层只展示 `theme`。
+当前正式检索只搜 `{headline share}`，不搜 `private`，以保证关键词入口跨房间安全。
+`private` 仅在 `--card` 且 viewer 与 `cards.room` 相同时展示。Python 侧写入和查询都先过 jieba。Last24 热层只展示 `headline`。
 
 ## clusters（Leiden index 层次社区）
 

@@ -1,6 +1,6 @@
 """预热跨房间语义检索用的 share-only 向量缓存。
 
-semantic_search（retrieval.py）对跨房间的卡只用 theme+share 文本的向量——
+semantic_search（retrieval.py）对跨房间的卡只用 headline+share 文本的向量——
 全文向量含 private，拿去跨房间排序等于让 private 参与泄露。这些 share 向量
 Leiden 建树不算，得单独预热；本脚本把缺的补齐。
 
@@ -25,7 +25,7 @@ from embedding import _cache_key, get_embedding
 
 def share_text(c) -> str:
     """跨房间匹配用的文本。必须和 retrieval.semantic_search 里的构造完全一致。"""
-    return "\n".join(p for p in [c["theme"] or "", c["share"] or ""] if p).strip()
+    return "\n".join(p for p in [c["headline"] or "", c["share"] or ""] if p).strip()
 
 
 def main() -> None:
@@ -36,7 +36,7 @@ def main() -> None:
 
     conn = dbm.connect()
     rows = conn.execute(
-        "SELECT card_id, theme, share FROM cards"
+        "SELECT card_id, headline, share FROM cards"
         " WHERE NULLIF(TRIM(COALESCE(share, '')), '') IS NOT NULL"
     ).fetchall()
 

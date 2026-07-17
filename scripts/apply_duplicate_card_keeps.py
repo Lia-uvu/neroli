@@ -69,7 +69,7 @@ def fetch_card_rows(conn: sqlite3.Connection, card_ids: list[str]) -> list[sqlit
     placeholders = ",".join("?" for _ in card_ids)
     return conn.execute(
         f"""
-        SELECT card_id, session_id, turn_start, turn_end, timestamp, theme
+        SELECT card_id, session_id, turn_start, turn_end, timestamp, headline
         FROM cards
         WHERE card_id IN ({placeholders})
         ORDER BY timestamp DESC, card_id
@@ -120,7 +120,7 @@ def main() -> int:
     print("\ndelete:")
     for row in fetch_card_rows(conn, delete):
         turn_range = f"{row['turn_start']}-{row['turn_end']}"
-        print(f"  {row['card_id']} {row['session_id'][:8]} R{turn_range} {row['timestamp']} {row['theme']}")
+        print(f"  {row['card_id']} {row['session_id'][:8]} R{turn_range} {row['timestamp']} {row['headline']}")
 
     if args.apply:
         delete_cards(conn, delete)
