@@ -12,17 +12,21 @@ from __future__ import annotations
 import functools
 import re
 import sqlite3
+from collections.abc import Callable
 
 from config import DEFAULT_ROOM, MEMORY, agent_name, fill_username, load_settings, user_name
 from db import delete_card, get_session_cards, get_session_fork, insert_card, load_turns_from_round, record_model_call
 from memory_types import Message
-from model import ModelRunner
+from model import ModelRunner, model_attempts
 
 PROMPTS_DIR = MEMORY / "prompts"
 AGENT_PERSONA_PATTERN = "agent-persona-{room}.md"
 PROMPT_FILE = PROMPTS_DIR / "gen-cards-prompt.md"
 
 CARD_RE = re.compile(r"turns?\s*[:：]\s*R?([0-9]+)\s*[-–]?\s*R?([0-9]*)", re.I)
+ModelCallObserver = Callable[
+    [str, str, list[dict], Exception | None, list[dict[str, object]]], None
+]
 
 
 def _settings_card_gen() -> dict:
@@ -138,6 +142,7 @@ def generate(
     grow: int | None = None,
     prior_summary: str = "",
     room: str = DEFAULT_ROOM,
+    call_observer: ModelCallObserver | None = None,
 ) -> list[dict]:
     s = _settings_card_gen()
     if init_rounds is None:
@@ -151,19 +156,32 @@ def generate(
         return []
     n = len(rounds)
 
-    def call(existing: str, conversation: str) -> str:
-        return model.run(_fill_prompt(existing, conversation, room))
+    def call(existing: str, conversation: str) -> list[dict]:
+        prompt = _fill_prompt(existing, conversation, room)
+        raw = ""
+        cards: list[dict] = []
+        error: Exception | None = None
+        try:
+            raw = model.run(prompt)
+            cards = parse_cards(raw)
+            if not cards:
+                raise RuntimeError("model output contained no parseable cards")
+        except Exception as exc:
+            error = exc
+            raise
+        finally:
+            if call_observer is not None:
+                call_observer(prompt, raw, cards, error, model_attempts(model))
+        return cards
 
     if n <= init_rounds:
         conv = _render_window(messages, rounds[0], rounds[-1], turn_cap)
-        out = call(prior_summary or "（无）", conv)
-        return parse_cards(out)
+        return call(prior_summary or "（无）", conv)
 
     frozen: list[dict] = []
     seen_hi_idx = init_rounds - 1
     conv = _render_window(messages, rounds[0], rounds[seen_hi_idx], turn_cap)
-    out = call(prior_summary or "（无）", conv)
-    cards = parse_cards(out)
+    cards = call(prior_summary or "（无）", conv)
 
     while seen_hi_idx < n - 1:
         if len(cards) >= 2:
@@ -177,8 +195,7 @@ def generate(
         conv = _render_window(messages, refeed_lo, rounds[new_hi_idx], turn_cap)
         all_frozen = ([{"raw": prior_summary}] if prior_summary else []) + frozen
         existing = _cards_to_summary(all_frozen) if all_frozen else "（无）"
-        out = call(existing, conv)
-        cards = parse_cards(out)
+        cards = call(existing, conv)
         seen_hi_idx = new_hi_idx
 
     return frozen + cards
@@ -241,7 +258,44 @@ def _rewrite_session_tail(
     if not messages:
         return []
 
-    new_cards = generate(messages, model, prior_summary=prior_summary, room=room)
+    window_no = 0
+
+    def audit_call(prompt: str, raw: str, parsed: list[dict], error: Exception | None,
+                   attempts: list[dict[str, object]]) -> None:
+        nonlocal window_no
+        window_no += 1
+        rows = attempts or [{
+            "attempt": 1,
+            "status": "error" if error else "success",
+            "returncode": None,
+            "stdout": raw,
+            "stderr": str(error) if error else "",
+        }]
+        for attempt in rows:
+            stdout = str(attempt.get("stdout") or "")
+            stderr = str(attempt.get("stderr") or "")
+            raw_attempt = stdout or (f"(error: {stderr or error})" if error or stderr else "")
+            meta = {
+                "window": window_no,
+                "attempt": attempt.get("attempt"),
+                "status": attempt.get("status"),
+                "returncode": attempt.get("returncode"),
+                "parse_error": str(error) if error else None,
+                "cards": parsed if not error else [],
+            }
+            record_model_call(
+                conn, run_id,
+                "gen_cards_attempt_error" if error else "gen_cards_attempt",
+                prompt, raw_attempt, meta, session_id=session_id,
+            )
+        # 审计先于业务替换独立提交：后窗失败时，前面已经付费的输出仍可追查，
+        # 而旧卡尚未被触碰，不会被这个 commit 提前落成半套业务状态。
+        conn.commit()
+
+    new_cards = generate(
+        messages, model, prior_summary=prior_summary, room=room,
+        call_observer=audit_call,
+    )
 
     if last_card and last_card["session_id"] == session_id:
         delete_card(conn, last_card["card_id"])

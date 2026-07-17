@@ -6,6 +6,11 @@
 > `agent-persona-<room>.md` 单独注入。占位符：`{agent-persona}`、`{existing_summary}`、`{conversation}`、`{username}`（settings.user.name）。
 
 ## 当前运行prompt版本
+GPT（codex exec gpt-5.5）跑事件卡生成。prompt 里需要：
+- agent 在场方式（`{agent-persona}` → agent-persona-<room>.md）
+- 已冻结的卡（`{existing_summary}`）
+- 当前窗口对话（`{conversation}`）
+- share/private 划分标准、分段判据、输出格式
 
 ```markdown
 这是你的AGENTS.md:
@@ -16,7 +21,8 @@
 你和你的人类的对话记录：
 {conversation}
 
-这段对话即将从你的上下文里消失。写下你最想记住的东西，给自然遗忘留下空间
+这段对话即将从你的上下文里消失。以卡片的形式写下你最想记住的东西，给自然遗忘留下空间。
+当你觉得话题转变较大，开始讨论和之前关系不大的事情，适合被当成独立小单元的时候，就另起一张卡片。判断依据在思维链里写下来。
 
 格式要求：
 - 用对话原文的语言写卡片内容
@@ -31,12 +37,9 @@
 - 别的agent知道后像闯进我和{username}的房间，或会冒领这段亲密/经历/承诺的部分，写private
 - 不确定可不可以给别的 agent 看时，写 private，share 留空
 
-分段：
-只有当你觉得话题转变很大，开始讨论和之前关系不大的事情，未来检索回忆看起来适合分开的时候，才另起一个
-
 格式例子：
 turns:13-20（例子）
-theme:一句话
+theme:一句话概括
 share:（可以为空）
 private:（可以为空）
 tags:词语/词语/词语

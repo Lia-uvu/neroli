@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import context
 import db
+import retrieval
 from memory_types import Message
 
 
@@ -124,9 +125,9 @@ class SmokePipelineTest(unittest.TestCase):
         tags = {r["tag"] for r in conn.execute("SELECT tag FROM card_tags").fetchall()}
         self.assertEqual(tags, {"leiden", "聚类", "bge-m3", "embedding"})
 
-        # --- FTS search ---
-        hits = db.search_cards(conn, "Leiden", viewer="room")
-        self.assertTrue(any("Leiden" in h["theme"] for h in hits))
+        # --- FTS search（生产检索路径：retrieval.search，非 db 旧口） ---
+        hits = retrieval.search(conn, "Leiden", viewer="room")
+        self.assertTrue(any("Leiden" in h.theme for h in hits))
 
         # --- context rebuild (into temp room dir) ---
         context.rebuild_context(conn)
@@ -135,6 +136,7 @@ class SmokePipelineTest(unittest.TestCase):
         body = context_file.read_text(encoding="utf-8")
         self.assertIn("讨论用 Leiden 聚类事件卡", body)
         self.assertIn("选 bge-m3 做 embedding", body)
+        self.assertIn("（今天）--", body)
 
         conn.close()
 

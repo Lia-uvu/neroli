@@ -25,6 +25,29 @@ launchctl bootout gui/$(id -u)/local.recall-watch-ingest
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.recall-watch-ingest.plist
 ```
 
+## 运行时依赖
+
+| 依赖 | 用途 | 安装 | 检查 |
+|------|------|------|------|
+| `fswatch` | watcher 文件监听 | `brew install fswatch` | `which fswatch` |
+| `codex` | 模型调用（出卡 / 实体去重 / curator） | ChatGPT.app 内置，或 `npm install -g @openai/codex` | `which codex` |
+
+`codex` 丢失时的表现：watcher 的 ingest 和 context rebuild 正常运行（无模型调用），但 `auto-cards`、实体去重、nightly curator 静默失败（日志报 `No such file or directory: 'codex'`）。`context-last-24.md` 照常刷新，**只是不再产出新卡**——容易误判为"一切正常"。
+
+`settings.model_access.provider=cli` 且 `cli_cmd` 为空时默认走 codex；填了 `cli_cmd`（如 `claude -p`）则用自定义命令，不依赖 codex。查找顺序：`$CLAUDE_MEMORY_CODEX_BIN` → PATH → ChatGPT.app/Codex.app 内置路径 → 裸 `codex`（见 `src/model.py:_codex_bin`）。
+
+App 更新可能改变内置路径——出卡突然全部静默失败时优先查这个。
+
+## 运行锁
+
+watcher 与 nightly 共用 `data/ingest.lock.d`，实现集中在 `bin/lock-lib.sh`。锁目录里的
+`owner` 记录实际子进程 PID 和本轮 token：PID 仍活着就永不按运行时长抢锁（curator 单次
+timeout 可达 900 秒，不能再用旧的 300 秒年龄阈值）；owner 已死才回收。释放时必须 token
+匹配，旧任务不能删除后来任务的锁。默认最多等约 60 秒，超时让当前步骤非零退出。
+
+手工清锁前先读 `data/ingest.lock.d/owner` 并用 `kill -0 PID` 确认进程确实不存在；活进程
+禁止直接删锁，否则可能让两个出卡/curator 同时写库。
+
 ## 调参（config/settings.json → `watcher` / `nightly`）
 
 改完即生效，无需重启 launchd。

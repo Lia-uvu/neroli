@@ -25,6 +25,7 @@ You are a coding agent maintaining an existing Neroli install. Start here when t
 | Search | [search.md](search.md) | `src/retrieval.py`, retrieval |
 | Midlayer | [midlayer.md](midlayer.md) | `--curate-snapshot`, `--curate-dry-run`, `--curate-export-workbench`, tree snapshots, per-room switches |
 | Cross-module / runtime | [common.md](common.md) | launchd, migrations, backups, file layout |
+| Health check / incidents | [incidents.md](incidents.md) | `bin/status.sh`, silent failures, 事故复盘 |
 | Schema | [../../schema.md](../../schema.md) | messages / turns / cards / clusters |
 
 ## What to edit

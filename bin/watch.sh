@@ -34,25 +34,8 @@ fi
 DEBOUNCE=$(python3 -c "import json;print(json.load(open('$PIPELINE/config/settings.json')).get('watcher',{}).get('ingest_debounce_seconds',5))")
 AUTO_CARDS=$(python3 -c "import json;print('1' if json.load(open('$PIPELINE/config/settings.json')).get('watcher',{}).get('auto_cards',False) else '')")
 LOCKDIR="$PIPELINE/data/ingest.lock.d"
-
-# 串行锁：mkdir 原子，macOS 无 flock。阻塞获取（最多等 ~60s），超 300s 的陈旧锁判为
-# 进程被杀残留，直接抢占——否则被杀的 ingest 会把 watcher 永久卡死。
-with_lock() {
-  local tries=0
-  until mkdir "$LOCKDIR" 2>/dev/null; do
-    local age
-    age=$(( $(date +%s) - $(stat -f%m "$LOCKDIR" 2>/dev/null || date +%s) ))
-    (( age > 300 )) && rmdir "$LOCKDIR" 2>/dev/null && continue
-    (( tries++ >= 600 )) && { echo "[watch] lock 等待超时，跳过本次" >&2; return 1; }
-    sleep 0.1
-  done
-  set +e
-  "$@"
-  local rc=$?
-  set -e
-  rmdir "$LOCKDIR" 2>/dev/null
-  return $rc
-}
+LOCK_LABEL="watch"
+source "$PIPELINE/bin/lock-lib.sh"
 
 echo "[watch:$MODE] 监听 ${DIRS[@]}"
 

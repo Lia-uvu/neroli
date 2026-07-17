@@ -11,7 +11,8 @@ SQL（宁可重复一小段，不跨模块 import，见 ARCHITECTURE.md 边界�
 每晚 rebuild-index 之后 snapshot() 把当前树原样拷成「今夜」。lineage() 对昨夜/今夜的
 叶子做 containment 匹配（overlap(O→N)=|O∩N|/|O|，primary 成员），给每个今夜叶归因
 来源线。render_report() 以**新卡驱动**拼《树变化报告》喂给夜间 curator——只报今晚有新卡
-（timestamp 晚于上次快照夜）的叶子，lineage 只作尾注身份线索，不定义「新」。
+（默认晚于上次快照夜；curator 改用上次成功 digest 夜）的叶子，lineage 只作尾注身份线索，
+不定义「新」。
 diff() 保留供 dry-run 的拓扑统计（new/continued/merged/split），报告不再用它。
 """
 from __future__ import annotations
@@ -210,10 +211,11 @@ def _fresh_cutoff(prev: str) -> str:
 # ---- heat + 标签 ----
 
 def _subtree_card_stats(conn: sqlite3.Connection, night: str, cluster_id: str,
-                        viewer: str | None) -> tuple[list[str], int, int]:
-    """cluster_id 子树里 viewer 可见的 primary 卡：(card_ids, n_24h, n_7d)。
+                        viewer: str | None) -> tuple[list[str], int, str]:
+    """cluster_id 子树里 viewer 可见的 primary 卡：(card_ids, n_24h, 最后活跃本地日期)。
 
     卡时间取主库 cards.timestamp（快照只存归属，不存时间）。
+    最后活跃给绝对日期而非 7d 窗口计数：冷要有深浅，curator 才知道 digest 里哪段该衰减。
     """
     visible, vparams = card_visible_clause(viewer, "c")
     rows = conn.execute(
@@ -236,11 +238,44 @@ def _subtree_card_stats(conn: sqlite3.Connection, night: str, cluster_id: str,
     ).fetchall()
     now = dt.datetime.now(dt.UTC)
     c24 = (now - dt.timedelta(hours=24)).isoformat()
-    c7 = (now - dt.timedelta(days=7)).isoformat()
     card_ids = [r["card_id"] for r in rows]
     n24 = sum(1 for r in rows if r["timestamp"] and r["timestamp"] >= c24)
-    n7 = sum(1 for r in rows if r["timestamp"] and r["timestamp"] >= c7)
-    return card_ids, n24, n7
+    latest = max((r["timestamp"] for r in rows if r["timestamp"]), default=None)
+    return card_ids, n24, _local_date(latest)
+
+
+def _local_date(ts: str | None) -> str:
+    """ISO 时间戳 → 本地日期（YYYY-MM-DD）；无时间戳给「—」。"""
+    if not ts:
+        return "—"
+    try:
+        parsed = dt.datetime.fromisoformat(ts)
+    except ValueError:
+        return ts[:10]
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.UTC)
+    return parsed.astimezone(LOCAL_TZ).strftime("%Y-%m-%d")
+
+
+def _access_by_card(conn: sqlite3.Connection, since: str) -> dict[str, tuple[int, dict[str, int]]]:
+    """card_access 里 since 之后的取用计数（只认 source='search'）：card_id → (总次数, {viewer: 次数})。
+
+    取用热的原始事实层。表可能尚未建（旧库没跑 008），容错返回空。
+    """
+    try:
+        rows = conn.execute(
+            "SELECT card_id, viewer, COUNT(*) AS n FROM card_access "
+            "WHERE source = 'search' AND ts >= ? GROUP BY card_id, viewer",
+            (since,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    out: dict[str, tuple[int, dict[str, int]]] = {}
+    for r in rows:
+        total, by = out.get(r["card_id"], (0, {}))
+        by[r["viewer"] or "?"] = r["n"]
+        out[r["card_id"]] = (total + r["n"], by)
+    return out
 
 
 def _visible_label(conn: sqlite3.Connection, card_ids: list[str], topn: int = 4) -> str:
@@ -281,7 +316,9 @@ def _card_themes(conn: sqlite3.Connection, card_ids: list[str], limit: int = 3) 
 # ---- 报告 ----
 
 def render_report(conn: sqlite3.Connection, night: str | None = None,
-                  viewer: str | None = None) -> str:
+                  viewer: str | None = None,
+                  fresh_after_night: str | None = None,
+                  fresh_from_success: bool = False) -> str:
     """《树变化报告》：顶层社区 heat + 昨夜/今夜叶子事件。条目式，喂模型用。
 
     viewer 过滤：只统计/展示可见卡，标签从可见卡重聚合，整卡不可见的社区整行不出现。
@@ -294,9 +331,15 @@ def render_report(conn: sqlite3.Connection, night: str | None = None,
         return f"（无 {night} 的树快照，先跑 --curate-snapshot）"
 
     prev = prev_night(conn, night)
+    # fresh 默认以上次快照为界；curator 可传最近一次成功 digest 夜，确保失败夜的新卡
+    # 不会因为快照已经推进而永久漏掉。
+    fresh_baseline = fresh_after_night if fresh_from_success else (fresh_after_night or prev)
+    acc_since = _fresh_cutoff(fresh_baseline) if fresh_baseline else (
+        dt.datetime.now(dt.UTC) - dt.timedelta(days=7)).isoformat()
+    acc = _access_by_card(conn, acc_since)
     header = f"== 树变化 {night}"
     header += f"（对比 {prev}）==" if prev else "（基线夜，无对比）=="
-    lines = [header, "", "顶层社区（卡数 / 24h新卡 / 7d新卡）："]
+    lines = [header, "", "顶层社区（卡数 / 24h新卡 / 最后活跃 / ↻取用）："]
 
     tops = conn.execute(
         "SELECT cluster_id FROM tree_snapshots WHERE night = ? AND level = 1", (night,)
@@ -304,13 +347,15 @@ def render_report(conn: sqlite3.Connection, night: str | None = None,
     top_stats = []
     for r in tops:
         cid = r["cluster_id"]
-        card_ids, n24, n7 = _subtree_card_stats(conn, night, cid, viewer)
+        card_ids, n24, last_active = _subtree_card_stats(conn, night, cid, viewer)
         if not card_ids:
             continue  # 整社区不可见：整行不出现
-        top_stats.append((cid, len(card_ids), n24, n7, _visible_label(conn, card_ids)))
+        n_read = sum(acc[c][0] for c in card_ids if c in acc)
+        top_stats.append((cid, len(card_ids), n24, last_active, n_read, _visible_label(conn, card_ids)))
     top_stats.sort(key=lambda t: t[1], reverse=True)
-    for cid, total, n24, n7, label in top_stats:
-        lines.append(f"  {cid} {label}   {total}卡  +{n24}/24h  +{n7}/7d")
+    for cid, total, n24, last_active, n_read, label in top_stats:
+        read_tag = f"  ↻{n_read}" if n_read else ""
+        lines.append(f"  {cid} {label}   {total}卡  +{n24}/24h  最后活跃{last_active}{read_tag}")
 
     if not prev:
         lines.append("")
@@ -321,12 +366,17 @@ def render_report(conn: sqlite3.Connection, night: str | None = None,
     # 拓扑无权定义「新」——lineage 只在行尾注记承接自昨夜哪条线，供 curator 对上 prev-digest。
     lin = lineage(conn, night, prev)
     leaves = _leaf_members(conn, night)
-    cutoff = _fresh_cutoff(prev)
+    cutoff = (
+        _fresh_cutoff(fresh_baseline)
+        if fresh_baseline
+        else "0001-01-01T00:00:00+00:00"
+    )
     fresh_by_n = {n: _fresh_visible_cards(conn, sorted(m), viewer, cutoff)
                   for n, m in leaves.items()}
 
     lines.append("")
-    lines.append("今晚有新卡的线（新=上次快照以来，按新卡数排序）：")
+    basis = "上次成功整理以来" if fresh_from_success else "上次快照以来"
+    lines.append(f"今晚有新卡的线（新={basis}，按新卡数排序）：")
 
     rows = []
     for n, fresh in fresh_by_n.items():
@@ -345,6 +395,19 @@ def render_report(conn: sqlite3.Connection, night: str | None = None,
             lines.append(f"        新卡样例：{themes}")
     if not rows:
         lines.append("  （无新卡）")
+
+    # 取用热：上次快照以来被 --card 展开过的可见卡。写入冷但取用热的线也算「有动静」——
+    # 一条线没有新卡不代表凉了，可能正被反复拿起（如 2026-07-09 的改名夜，教训）。
+    if acc:
+        vis = set(_visible_cards(conn, sorted(acc), viewer))
+        acc_rows = sorted(((acc[c][0], c) for c in vis), reverse=True)[:8]
+        if acc_rows:
+            lines.append("")
+            lines.append("本期被重新取用的卡（↻次数，含哪些房间在翻）：")
+            for n_read, c in acc_rows:
+                by = "、".join(f"{room}×{n}" for room, n in sorted(acc[c][1].items()))
+                theme = (_card_themes(conn, [c], limit=1) or ["—"])[0]
+                lines.append(f"  {c} ↻{n_read}（{by}）  {theme[:48]}")
 
     reshuffle = _reshuffle_count(lin, fresh_by_n)
     if reshuffle:

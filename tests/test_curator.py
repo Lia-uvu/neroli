@@ -137,8 +137,8 @@ class RunCurationRenderTest(unittest.TestCase):
         (wb / "prev-digest.md").write_text("Amy is maintaining recall-pipeline.\n", encoding="utf-8")
         (wb / "tree-report.md").write_text(
             "== 树变化 2026-07-02（对比 2026-07-01）==\n\n"
-            "顶层社区（卡数 / 24h新卡 / 7d新卡）：\n"
-            "  c0001 recall-pipeline(4) 开源(2)   6卡  +1/24h  +3/7d\n\n"
+            "顶层社区（卡数 / 24h新卡 / 最后活跃）：\n"
+            "  c0001 recall-pipeline(4) 开源(2)   6卡  +1/24h  最后活跃2026-07-02\n\n"
             "今晚有新卡的线（新=上次快照以来，按新卡数排序）：\n"
             "  c0001 [recall-pipeline(4) 开源(2)]  +1卡（共6卡）\n"
             "        新卡样例：Amy chose the repository license.\n",
@@ -169,7 +169,10 @@ class RunCurationRenderTest(unittest.TestCase):
                ' "constants": [{"op": "add", "content": "事实X", "shared": true}],'
                ' "constants_md": "# 组织版\\n- 事实X"}\n```')
         res, room_dir, _ = self._run(raw)
-        self.assertIn("要点A", (room_dir / "digest.md").read_text(encoding="utf-8"))
+        digest_md = (room_dir / "digest.md").read_text(encoding="utf-8")
+        self.assertIn("要点A", digest_md)
+        self.assertIn("> 夜间 curator 滚动维护\n", digest_md)
+        self.assertNotIn("有动静的线刷新", digest_md)
         self.assertEqual((room_dir / "constants.md").read_text(encoding="utf-8").strip(),
                          "# 组织版\n- 事实X")  # 模型组织版，非机械渲染
         self.assertEqual(res[0]["constants"]["add"], 1)
@@ -205,16 +208,43 @@ class RunCurationRenderTest(unittest.TestCase):
             conn.close()
             path.unlink(missing_ok=True)
 
+    def test_freshness_uses_last_successful_digest_not_failed_snapshot(self):
+        conn, path = _tmp_conn()
+        try:
+            conn.execute(
+                "INSERT INTO digests (night, room, body) VALUES ('2026-07-04', 'room', 'ok')"
+            )
+            conn.execute(
+                "INSERT INTO tree_snapshots (night, cluster_id) VALUES "
+                "('2026-07-05', 'c1'), ('2026-07-06', 'c1')"
+            )
+            # 07-05 的 curator 假设失败、没有 digest；这张 07-05 卡在 07-06 仍必须算 fresh。
+            conn.execute(
+                "INSERT INTO cards (card_id, session_id, share, timestamp, room) "
+                "VALUES ('retry#1', 's1', 'missed last night', "
+                "'2026-07-05T12:00:00+00:00', 'room')"
+            )
+            conn.commit()
+
+            self.assertEqual(curator.fresh_card_count(conn, "room", "2026-07-07"), 1)
+            conn.execute("DELETE FROM digests")
+            conn.commit()
+            # 首次整理此前即使已有快照，也不能拿快照冒充成功水位。
+            self.assertEqual(curator.fresh_card_count(conn, "room", "2026-07-07"), 1)
+        finally:
+            conn.close()
+            path.unlink(missing_ok=True)
+
     def test_room_persona_is_injected(self):
         raw = '```json\n{"digest": "d", "constants": []}\n```'
         _res, _den, prompts = self._run(raw)
         self.assertEqual(len(prompts), 1)
         self.assertIn("这是你的AGENTS.md:", prompts[0])
         self.assertIn("I am Claude, Amy's long-term coding collaborator.", prompts[0])
-        self.assertIn("现在你需要维护更新自己的记忆", prompts[0])
+        self.assertIn("现在你需要维护更新这两个文件", prompts[0])
         self.assertIn("Amy is maintaining recall-pipeline.", prompts[0])
         self.assertIn("今晚有新卡的线", prompts[0])
-        self.assertIn("顶层社区（卡数 / 24h新卡 / 7d新卡）", prompts[0])
+        self.assertIn("顶层社区（卡数 / 24h新卡 / 最后活跃）", prompts[0])
         self.assertNotIn("{agent-persona}", prompts[0])
         self.assertNotIn("{pre-digest}", prompts[0])
         self.assertNotIn("{tree-diff}", prompts[0])

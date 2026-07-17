@@ -11,6 +11,8 @@ docs/archive/
 docs/proposal-*.md
 scripts/archive/
 GIT-MAINTENANCE.local.md
+OPS-JOURNAL.local.md
+bin/alert-local.sh
 
 # ── runtime output ──
 data/

@@ -1,3 +1,4 @@
+-- schema v8（2026-07-11，卡片取用日志 card_access：read-heat，重量用「被重新拿起」度量）
 -- schema v7（2026-07-02，中期层/馆员：树快照 + 近况总结 + constant 篮子）。设计见 docs/proposal-20260702-midlayer-tree-privacy.md。
 -- schema v6（2026-06-28，会话 fork 关系层）
 -- schema v5（2026-06-26，Leiden 索引层：实体去重 + 社区层次）。设计依据 docs/design-leiden.html。
@@ -18,7 +19,7 @@
 -- 暂未含（待设计）：profile 画像注入层；embedding 向量索引。（constant 篮子已在 v7 落表）
 
 PRAGMA journal_mode = WAL;
-PRAGMA user_version = 7;
+PRAGMA user_version = 8;
 
 CREATE TABLE IF NOT EXISTS pipeline_runs (
   id TEXT PRIMARY KEY,
@@ -218,3 +219,14 @@ CREATE TABLE IF NOT EXISTS constants (
 );
 CREATE INDEX IF NOT EXISTS constants_room_idx   ON constants(room, status);
 CREATE INDEX IF NOT EXISTS constants_shared_idx ON constants(shared, status);
+
+-- 卡片取用日志（v8）：--card 展开时记一笔，treesnap 聚合成取用热喂 curator。
+-- ts 由写入方给 UTC ISO（与 cards.timestamp 可比）；DEFAULT 只是兜底。
+CREATE TABLE IF NOT EXISTS card_access (
+  card_id TEXT NOT NULL,
+  viewer  TEXT NOT NULL,
+  source  TEXT NOT NULL DEFAULT 'search',
+  ts      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS card_access_ts_idx   ON card_access(ts);
+CREATE INDEX IF NOT EXISTS card_access_card_idx ON card_access(card_id, ts);

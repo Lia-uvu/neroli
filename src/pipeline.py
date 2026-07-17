@@ -109,23 +109,37 @@ def check_card_gen_threshold(conn: sqlite3.Connection) -> tuple[bool, str]:
     min_rounds = s.get("min_new_turns", 5)
     min_minutes = s.get("min_interval_minutes", 60)
 
-    row = conn.execute(
-        "SELECT MAX(created_at) as last_gen FROM model_calls WHERE step IN ('gen_cards', 'gen_cards_update')"
+    attempt_row = conn.execute(
+        """
+        SELECT MAX(created_at) AS last_attempt FROM model_calls
+        WHERE step IN ('gen_cards', 'gen_cards_update',
+                       'gen_cards_attempt', 'gen_cards_attempt_error')
+        """
     ).fetchone()
-    last_gen = row["last_gen"] if row and row["last_gen"] else None
+    last_attempt = attempt_row["last_attempt"] if attempt_row and attempt_row["last_attempt"] else None
+    elapsed = float("inf")
 
-    if last_gen:
+    if last_attempt:
         try:
-            last_gen_dt = dt.datetime.fromisoformat(last_gen.replace("Z", "+00:00"))
-            if last_gen_dt.tzinfo is None:
-                last_gen_dt = last_gen_dt.replace(tzinfo=dt.UTC)
+            last_attempt_dt = dt.datetime.fromisoformat(last_attempt.replace("Z", "+00:00"))
+            if last_attempt_dt.tzinfo is None:
+                last_attempt_dt = last_attempt_dt.replace(tzinfo=dt.UTC)
         except ValueError:
-            last_gen_dt = None
+            last_attempt_dt = None
 
-        if last_gen_dt:
-            elapsed = (dt.datetime.now(dt.UTC) - last_gen_dt).total_seconds() / 60
+        if last_attempt_dt:
+            elapsed = (dt.datetime.now(dt.UTC) - last_attempt_dt).total_seconds() / 60
             if elapsed < min_minutes:
                 return False, f"too soon ({elapsed:.0f}min < {min_minutes}min)"
+
+    success_row = conn.execute(
+        """
+        SELECT MAX(created_at) AS last_success FROM model_calls
+        WHERE step IN ('gen_cards', 'gen_cards_update')
+        """
+    ).fetchone()
+    last_success = success_row["last_success"] if success_row and success_row["last_success"] else None
+    if last_success:
         new_count = conn.execute(
             """
             SELECT COUNT(*) AS n
@@ -135,10 +149,9 @@ def check_card_gen_threshold(conn: sqlite3.Connection) -> tuple[bool, str]:
               WHERE created_at > ?
             )
             """,
-            (last_gen,),
+            (last_success,),
         ).fetchone()["n"]
     else:
-        elapsed = float("inf")
         new_count = conn.execute(
             """
             SELECT COUNT(*) AS n
@@ -158,7 +171,7 @@ def check_card_gen_threshold(conn: sqlite3.Connection) -> tuple[bool, str]:
 def sessions_needing_update(conn: sqlite3.Connection) -> list[tuple[str, str]]:
     """找出有新 turns 超过最后一张卡的 session。按最近活跃排序，返回 [(session_id, room), ...]"""
     s = load_settings().get("card_gen", {})
-    min_first_session_turns = s.get("min_first_session_turns", 4)
+    min_first_session_turns = s.get("min_first_session_turns", 3)
 
     rows = conn.execute("""
         WITH turn_stats AS (
@@ -254,15 +267,23 @@ def auto_generate_cards(
     targets = targets[:max_per_trigger]
 
     count = 0
+    failures: list[tuple[str, Exception]] = []
     for session_id, room in targets:
         try:
             update_session_cards(conn, run_id, session_id, model, room=room)
             count += 1
         except Exception as exc:
             conn.rollback()
+            failures.append((session_id, exc))
             print(f"  auto-cards FAILED {session_id}: {exc}")
 
     if count:
         finalize_card_updates(conn)
+
+    if failures:
+        raise RuntimeError(
+            f"auto-cards failed for {len(failures)}/{len(targets)} sessions; "
+            "see preceding FAILED lines"
+        )
 
     return count

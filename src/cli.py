@@ -133,6 +133,23 @@ def run(argv: list[str] | None = None) -> int:
 
     if args.auto_cards:
         s = load_settings().get("card_gen", {})
+        from pipeline import check_card_gen_threshold
+        if args.dry_run:
+            # 与 auto_generate_cards 同一套阈值+选点，不建模型、不落 pipeline_run。
+            from pipeline import sessions_needing_update
+            ok, reason = check_card_gen_threshold(conn)
+            if not ok:
+                print(f"auto-cards dry-run: not triggered ({reason})")
+                return 0
+            targets = sessions_needing_update(conn)[: s.get("max_sessions_per_trigger", 3)]
+            for session_id, room in targets:
+                print(f"{session_id} [{room}]")
+            print(f"auto-cards dry-run: would update {len(targets)} sessions")
+            return 0
+        ok, reason = check_card_gen_threshold(conn)
+        if not ok:
+            print(f"auto-cards: not triggered ({reason})")
+            return 0
         model_name = args.model or default_model()
         if args.provider == "cli" and not args.model_cmd:
             effort = s.get("reasoning_effort", "low")
@@ -174,7 +191,7 @@ def run(argv: list[str] | None = None) -> int:
                     api_base_url=args.api_base_url or os.environ.get("CLAUDE_MEMORY_API_BASE_URL"),
                     api_key_env=args.api_key_env, temperature=args.api_temperature,
                     max_tokens=args.api_max_tokens, timeout=timeout,
-                    model_cmd=model_cmd, cwd=cwd,
+                    model_cmd=model_cmd, cwd=cwd, success_artifact="submission.json",
                 )
 
             results = curator.run_curation(conn, make_curator_model, night=night, db_path=args.db)
@@ -310,7 +327,7 @@ def run(argv: list[str] | None = None) -> int:
     print(f"wrote {args.db}")
     print(f"rebuilt index: {index_stats}")
     print("wrote <room>/context-last-24.md")
-    return 0
+    return 1 if failed else 0
 
 
 def make_model(provider: str, model_name: str, args: argparse.Namespace):

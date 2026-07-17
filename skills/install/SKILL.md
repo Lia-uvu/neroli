@@ -24,7 +24,7 @@ Explain the **night curator** up front, because its name confuses people later: 
 Say the three transparency points out loud, in your own words:
 
 - **Cost.** Nothing calls a model until the switches are turned on in first-run.md. Once on: card generation is one model call per ~14 conversation rounds, triggered only when a session has ≥5 new turns and ≥60 min since its last call (defaults; see `settings.card_gen`). Night curator: at most one agent call per room per night, **skipped entirely if the room produced no new cards that day**. Backfilling history is the only potentially large expense, and it is always priced and confirmed first.
-- **Memory rhythm.** Chats of ≤3 rounds are never memorized (default; `card_gen.min_first_session_turns`). New content takes up to an hour to become a card. Digest and constants update overnight. In short: *short things aren't kept, new things wait, summaries are a night behind.*
+- **Memory rhythm.** Chats of ≤2 turns are never memorized (default; `card_gen.min_first_session_turns`). New content takes up to an hour to become a card. Digest and constants update overnight. In short: *short things aren't kept, new things wait, summaries are a night behind.*
 - **Data destination.** Storage is local SQLite. But card generation and the night curator send conversation excerpts to whatever model provider you configure, and embeddings go to the embedding endpoint (unless you pick a local Ollama backend). Local-first, not air-gapped.
 
 ## Stages — read each file when you reach it, not all upfront

@@ -30,7 +30,7 @@
     "_comment": "INSTALL: model. Event-card generation. Triggers when a session has >= min_new_turns new turns AND >= min_interval_minutes since its last card call ('short chats are not memorized, new content waits up to an hour'). Sessions shorter than min_first_session_turns never card.",
     "min_new_turns": 5,
     "min_interval_minutes": 60,
-    "min_first_session_turns": 4,
+    "min_first_session_turns": 3,
     "max_sessions_per_trigger": 10,
     "model": "gpt-5.5",
     "reasoning_effort": "low",
@@ -72,8 +72,8 @@
   },
 
   "ingest": {
-    "_comment": "fork_min_shared_turns: two sessions sharing >= this many source_uuid rows are treated as a fork. origin_data_dir (optional): archive directory of claude.ai web exports for scripts/ingest_claude_ai_exports.py; leave empty if unused.",
-    "fork_min_shared_turns": 6,
+    "_comment": "fork_min_shared_turns: two sessions sharing >= this many source_uuid rows are treated as a fork. Cross-session uuid equality only comes from copied history (desktop interrupt+resend forks silently), and normalized/test hashes include source_file so they can't collide across files — a low threshold is safe; short forked chats slip past higher values and produce duplicate cards. origin_data_dir (optional): archive directory of claude.ai web exports for scripts/ingest_claude_ai_exports.py; leave empty if unused.",
+    "fork_min_shared_turns": 2,
     "origin_data_dir": ""
   },
 

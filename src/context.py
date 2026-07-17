@@ -12,7 +12,7 @@ from pathlib import Path
 
 from config import ROOMS, ROOM_DIRS, ROOM_SLUGS, load_settings
 from db import card_visible_clause
-from timefmt import format_local_date_time
+from timefmt import configured_timezone, format_local_date_time
 
 
 def context_path_for(viewer: str) -> Path:
@@ -28,6 +28,8 @@ def rebuild_context(conn: sqlite3.Connection, viewer: str | None = None) -> None
 
 def rebuild_context_for(conn: sqlite3.Connection, viewer: str) -> None:
     s = load_settings().get("context", {})
+    display_tz = configured_timezone()
+    today = dt.datetime.now(display_tz).strftime("%Y-%m-%d")
     lookback = s.get("lookback_hours", 24)
     max_cards = s.get("max_cards", 80)
     cutoff = (dt.datetime.now(dt.UTC) - dt.timedelta(hours=lookback)).isoformat()
@@ -48,18 +50,20 @@ def rebuild_context_for(conn: sqlite3.Connection, viewer: str) -> None:
     lines = [
         "# context",
         "",
-        f"最近{lookback}小时的事件卡摘要。过期条目从这里淡出，但仍留在 SQLite 中供 recall 检索。",
+        f"最近{lookback}小时的事件卡摘要。过期条目从这里淡出，但仍留在 SQLite 中供 recall 检索；"
+        f"行尾是卡片 id，`search.sh --card ID` 直接展开全文。",
     ]
     current_date = None
     for row in rows:
-        date_str, time_str = format_local_date_time(row["timestamp"])
+        date_str, time_str = format_local_date_time(row["timestamp"], display_tz)
         if date_str != current_date:
             current_date = date_str
             lines.append("")
-            lines.append(f"--{date_str}--")
+            today_tag = "（今天）" if date_str == today else ""
+            lines.append(f"--{date_str}{today_tag}--")
         content = row["theme"]
         room_tag = f" [{row['room']}]" if row["room"] != room else ""
-        lines.append(f"- {time_str} {content}{room_tag}")
+        lines.append(f"- {time_str} {content}{room_tag} ·{row['card_id']}")
     path = context_path_for(viewer)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

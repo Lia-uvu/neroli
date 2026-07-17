@@ -2,8 +2,8 @@
 
 Leaf utility shared by the context, search, and tempo modules.
 Reads the display timezone from settings.json ("timezone" key, default
-Asia/Shanghai).  The value is resolved once at import time so every
-module that touches LOCAL_TZ sees the same zone.
+Asia/Shanghai).  Callers can resolve it at the start of each operation so a
+settings change takes effect without restarting a long-lived process.
 """
 from __future__ import annotations
 
@@ -15,7 +15,12 @@ from config import load_settings
 LOCAL_TZ = ZoneInfo(load_settings().get("timezone", "Asia/Shanghai"))
 
 
-def format_local_timestamp(value: str | None) -> str:
+def configured_timezone() -> ZoneInfo:
+    """Return the timezone currently configured in settings.json."""
+    return ZoneInfo(load_settings().get("timezone", "Asia/Shanghai"))
+
+
+def format_local_timestamp(value: str | None, tz: dt.tzinfo | None = None) -> str:
     if not value:
         return ""
     try:
@@ -23,12 +28,15 @@ def format_local_timestamp(value: str | None) -> str:
         parsed = dt.datetime.fromisoformat(normalized)
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=dt.UTC)
-        return parsed.astimezone(LOCAL_TZ).strftime("%Y-%m-%d %H:%M")
+        return parsed.astimezone(tz or configured_timezone()).strftime("%Y-%m-%d %H:%M")
     except ValueError:
         return value[:16].replace("T", " ")
 
 
-def format_local_date_time(value: str | None) -> tuple[str, str]:
+def format_local_date_time(
+    value: str | None,
+    tz: dt.tzinfo | None = None,
+) -> tuple[str, str]:
     if not value:
         return ("", "")
     try:
@@ -36,7 +44,7 @@ def format_local_date_time(value: str | None) -> tuple[str, str]:
         parsed = dt.datetime.fromisoformat(normalized)
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=dt.UTC)
-        local = parsed.astimezone(LOCAL_TZ)
+        local = parsed.astimezone(tz or configured_timezone())
         return (local.strftime("%Y-%m-%d"), local.strftime("%H:%M"))
     except ValueError:
         parts = value[:16].replace("T", " ").split(" ", 1)

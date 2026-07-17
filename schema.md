@@ -1,4 +1,4 @@
-# recall-pipeline 表结构（schema v7）
+# recall-pipeline 表结构（schema v8）
 
 > 改 db.py 或 schema.sql 时查这个。
 >
@@ -173,7 +173,7 @@ ingest 必须读完整文件（round 跨文件一次算），`--max-messages` �
 
 ### digests（每房间每晚近况小结）
 
-由 curator agent（`cli.py --curate`）**滚动维护**（≤800字，拿昨晚 body 当底子更新）；房间 `digest.md` 覆盖式，此表留每晚历史、并作下晚 `prev-digest.md` 的来源。
+由 curator agent（`cli.py --curate`）**滚动维护**（上限取 `settings.midlayer.digest_max_chars`，拿昨晚 body 当底子更新）；房间 `digest.md` 覆盖式，此表留每晚历史、并作下晚 `prev-digest.md` 的来源。
 
 | 字段 | 说明 |
 |------|------|
@@ -198,7 +198,7 @@ ingest 必须读完整文件（round 跨文件一次算），`--max-messages` �
 
 ## pipeline_runs / model_calls（审计记录）
 
-运行日志，只追加不删改。`model_calls.step` 值：`gen_cards`（全量）、`gen_cards_update`（增量重写）、`curate:<room>`（馆员近况小结 + constants，一次调用同产）。
+运行日志，只追加不删改。`model_calls.step` 分两层：`gen_cards_attempt*`、`entity_resolve_attempt*` 与 `curate:<room>:attempt` 是物理模型尝试（prompt/raw/退出状态逐次留档）；`gen_cards` / `gen_cards_update` 与 `curate:<room>` 是业务逻辑成功；`curate:<room>:error` 是无合法提交。统计模型实际调用次数看 `*attempt*`，不要数逻辑成功行。
 
 ## session_forks（会话 fork 关系，v6）
 
@@ -217,3 +217,16 @@ Claude Code 撤回/重发或手动 fork 时会新建 session JSONL，但把旧 t
 | detected_at | 入库时间 |
 
 `session_forks_parent_idx` 索引 `parent_session_id`。
+
+## card_access（卡片取用日志，v8）
+
+重量不在写入时标，用「被重新拿起」度量。`retrieval.py` CLI 的 `--card` 展开时记一笔（列表扫过不算）；`RECALL_NO_LOG=1` 跳过写入，批量脚本防污染用。curator 工作台的 recall 指向自己的 view.db 快照，天然进不了主库。读端在 `treesnap.render_report`：聚合成顶层社区 `↻取用` 计数和「本期被重新取用的卡」清单，随树报告喂 curator——写入冷但取用热的线也算有动静。
+
+| 字段 | 说明 |
+|------|------|
+| card_id | 被展开的卡 |
+| viewer | 谁在翻（room slug，如 `main` / `secondary`） |
+| source | 来路，聚合只认 `search` |
+| ts | UTC ISO（写入方显式给，与 cards.timestamp 可比；DEFAULT 兜底） |
+
+`card_access_ts_idx` 索引 `ts`；`card_access_card_idx` 索引 `(card_id, ts)`。

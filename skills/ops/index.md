@@ -32,3 +32,8 @@ embedding 服务于建图的 kNN 边，属于本模块的外部依赖。
 | `model` | BAAI/bge-m3 | embedding 模型（api: BAAI/bge-m3 via SiliconFlow; ollama: nomic-embed-text） |
 
 embedding 必需走 API（或 ollama）；实体判定的 LLM judge 可选，不可用时新 tag 留在实体边之外，不阻断索引重建。
+
+实体 judge 按 batch 要求**完整回覆每个 tag**；缺项、重复 tag、非法候选或畸形 JSON 都是
+硬失败，本批不写 `tag_entity_map`，由索引层软降级后下次重试，不能再把“没解析到 verdict”
+静默当成新实体。每次物理调用以 `model_calls.step=entity_resolve_attempt` 留 prompt/raw/退出
+状态，失败为 `entity_resolve_attempt_error`。

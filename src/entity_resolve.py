@@ -26,8 +26,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "vendor"))
 
 from config import custom_cli_cmd, load_settings, model_provider
+from db import create_pipeline_run, record_model_call
 from embedding import get_embedding
-from model import _build_codex_cmd_with_effort, build_model
+from model import _build_codex_cmd_with_effort, build_model, model_attempts
 
 # 阈值与裁判模型都在 settings.entity_resolve；这里的字面量只是缺省。
 _er = load_settings().get("entity_resolve", {})
@@ -105,27 +106,63 @@ def _unresolved_tags(conn) -> list[str]:
     return [r["tag"] for r in rows]
 
 
-def _judge(judge: CLIModel, items: list[tuple[str, list[str]]]) -> dict[str, str | None]:
-    """items: (new_tag, [candidate names]); returns new_tag -> chosen candidate or None."""
-    lines = [f'{i+1}. "{tag}" 候选: {", ".join(cands)}' for i, (tag, cands) in enumerate(items)]
-    out = judge.run(PROMPT_HEADER + "\n".join(lines))
+def _parse_judge_output(out: str, items: list[tuple[str, list[str]]]) -> dict[str, str | None]:
+    """严格解析一个完整 batch；缺项/重复/非法候选都视为失败，不静默建新实体。"""
     m = re.search(r"\[.*\]", out, re.S)
     if not m:
-        return {}
+        raise RuntimeError("entity judge output did not contain a JSON array")
     try:
         verdicts = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return {}
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("entity judge output contained invalid JSON") from exc
+    if not isinstance(verdicts, list):
+        raise RuntimeError("entity judge verdict must be a JSON array")
     result: dict[str, str | None] = {}
     valid = {tag: set(cands) for tag, cands in items}
-    for v in verdicts:
-        tag = v.get("tag")
-        into = v.get("merge_into")
-        if tag in valid and into in valid[tag]:
-            result[tag] = into
-        elif tag in valid:
-            result[tag] = None
+    for verdict in verdicts:
+        if not isinstance(verdict, dict):
+            raise RuntimeError("entity judge verdict item must be an object")
+        tag = verdict.get("tag")
+        into = verdict.get("merge_into")
+        if tag not in valid or tag in result:
+            raise RuntimeError(f"entity judge returned unknown/duplicate tag: {tag!r}")
+        if into is not None and into not in valid[tag]:
+            raise RuntimeError(f"entity judge returned invalid candidate for {tag!r}: {into!r}")
+        result[tag] = into
+    missing = set(valid) - set(result)
+    if missing:
+        raise RuntimeError("entity judge omitted tags: " + ", ".join(sorted(missing)))
     return result
+
+
+def _judge(judge, items: list[tuple[str, list[str]]], conn, run_id: str) -> dict[str, str | None]:
+    """items: (new_tag, [candidate names]); returns new_tag -> chosen candidate or None."""
+    lines = [f'{i+1}. "{tag}" 候选: {", ".join(cands)}' for i, (tag, cands) in enumerate(items)]
+    prompt = PROMPT_HEADER + "\n".join(lines)
+    out = ""
+    error = None
+    try:
+        out = judge.run(prompt)
+        return _parse_judge_output(out, items)
+    except Exception as exc:
+        error = exc
+        raise
+    finally:
+        attempts = model_attempts(judge) or [{
+            "attempt": 1, "status": "error" if error else "success",
+            "returncode": None, "stdout": out, "stderr": str(error) if error else "",
+        }]
+        for attempt in attempts:
+            stdout = str(attempt.get("stdout") or "")
+            stderr = str(attempt.get("stderr") or "")
+            meta = {k: v for k, v in attempt.items() if k not in ("stdout", "stderr")}
+            record_model_call(
+                conn, run_id,
+                "entity_resolve_attempt_error" if error else "entity_resolve_attempt",
+                prompt, stdout or (f"(error: {stderr or error})" if error or stderr else ""),
+                meta,
+            )
+        conn.commit()
 
 
 def _new_entity(conn, name: str, backend: str, model: str) -> int:
@@ -181,9 +218,10 @@ def resolve_new_tags(conn) -> dict:
         judge = build_model(prov, JUDGE_MODEL,
                             api_base_url=os.environ.get("CLAUDE_MEMORY_API_BASE_URL"),
                             model_cmd=cmd)
+        run_id = create_pipeline_run(conn, judge.name, None, [])
         for start in range(0, len(pending), BATCH):
             chunk = pending[start:start + BATCH]
-            verdict = _judge(judge, chunk)
+            verdict = _judge(judge, chunk, conn, run_id)
             for tag, cands in chunk:
                 into = verdict.get(tag)
                 if into and into in name_to_id:

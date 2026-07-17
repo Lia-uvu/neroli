@@ -9,6 +9,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Protocol
 
 
@@ -34,15 +35,29 @@ class CLIModel:
 
     RETRY_DELAYS = (30, 60, 120)
 
-    def __init__(self, command: str, timeout: float = 300.0, cwd: str | None = None) -> None:
+    def __init__(self, command: str, timeout: float = 300.0, cwd: str | None = None,
+                 success_artifact: str | None = None) -> None:
         self.name = f"cli:{command}"
         self.argv = shlex.split(command)
         self.timeout = timeout
         self.cwd = cwd  # agentic CLI（codex）以此为工作区根：curator 的工作台目录
+        self.success_artifact = (
+            (Path(cwd) / success_artifact) if cwd and success_artifact
+            else (Path(success_artifact) if success_artifact else None)
+        )
+        self.last_attempts: list[dict[str, object]] = []
+
+    def _artifact_ready(self) -> bool:
+        return bool(self.success_artifact and self.success_artifact.is_file())
+
+    def _artifact_result(self) -> str:
+        assert self.success_artifact is not None
+        return f"(success artifact: {self.success_artifact.name})"
 
     def run(self, prompt: str) -> str:
+        self.last_attempts = []
         last_error: Exception | None = None
-        for attempt, delay in enumerate((0,) + self.RETRY_DELAYS):
+        for attempt, delay in enumerate((0,) + self.RETRY_DELAYS, 1):
             if delay:
                 time.sleep(delay)
             try:
@@ -57,14 +72,45 @@ class CLIModel:
                     check=False,
                 )
             except subprocess.TimeoutExpired as error:
+                stdout = error.stdout.decode(errors="replace") if isinstance(error.stdout, bytes) else (error.stdout or "")
+                stderr = error.stderr.decode(errors="replace") if isinstance(error.stderr, bytes) else (error.stderr or "")
+                self.last_attempts.append({
+                    "attempt": attempt, "status": "timeout", "returncode": None,
+                    "stdout": clean_model_text(stdout), "stderr": clean_model_text(stderr)[:2000],
+                })
+                # subprocess.run 已终止超时子进程；如果它在被终止前已完成协议提交，
+                # submission 才是成功信号，不应再付费重跑。
+                if self._artifact_ready():
+                    return self._artifact_result()
                 last_error = RuntimeError(f"CLI model timed out after {self.timeout}s")
                 continue
-            if result.returncode == 0 and result.stdout.strip():
-                return clean_model_text(result.stdout)
+            self.last_attempts.append({
+                "attempt": attempt,
+                "status": "exit_0" if result.returncode == 0 else "exit_nonzero",
+                "returncode": result.returncode,
+                "stdout": clean_model_text(result.stdout),
+                "stderr": clean_model_text(result.stderr)[:2000],
+            })
+            # artifact 已由上层复验；只要本轮新产物存在，就优先于 CLI 的收尾退出码。
+            # 这样 submit 成功后 telemetry/cleanup 报错也不会把同一任务再跑四次。
+            if self._artifact_ready():
+                return self._artifact_result()
+            if result.returncode == 0:
+                if result.stdout.strip():
+                    return clean_model_text(result.stdout)
+                # curator 的 agent 通过 ./submit 把已门审结果落成 submission.json 后，
+                # 会遵照 prompt 不再输出 final。这个文件由每轮导出工作台时先删除，
+                # 因而 rc=0 + 新产物存在就是本轮成功；上层仍会复验内容和 constant_id。
             last_error = RuntimeError(
                 f"CLI model exited {result.returncode}: {result.stderr.strip()[:500] or 'empty output'}"
             )
         raise last_error or RuntimeError("CLI model failed")
+
+
+def model_attempts(model: ModelRunner) -> list[dict[str, object]]:
+    """返回最近一次 run 的物理 CLI 尝试；无内部重试信息的 runner 返回空。"""
+    attempts = getattr(model, "last_attempts", None)
+    return list(attempts) if isinstance(attempts, list) else []
 
 
 def _codex_bin() -> str:
@@ -75,8 +121,13 @@ def _codex_bin() -> str:
     found = shutil.which("codex")
     if found:
         return found
-    app_codex = "/Applications/Codex.app/Contents/Resources/codex"
-    return app_codex if os.path.exists(app_codex) else "codex"
+    for app_path in (
+        "/Applications/ChatGPT.app/Contents/Resources/codex",
+        "/Applications/Codex.app/Contents/Resources/codex",
+    ):
+        if os.path.exists(app_path):
+            return app_path
+    return "codex"
 
 
 def _build_codex_cmd_with_effort(model_name: str, reasoning_effort: str = "low",
@@ -208,10 +259,12 @@ def build_model(
     timeout: float = 120.0,
     model_cmd: str | None = None,
     cwd: str | None = None,
+    success_artifact: str | None = None,
 ) -> ModelRunner:
     if provider == "cli":
         command = model_cmd or os.environ.get("CLAUDE_MEMORY_MODEL_CMD") or default_codex_command(name)
-        return CLIModel(command, timeout=max(timeout, 300.0), cwd=cwd)
+        return CLIModel(command, timeout=max(timeout, 300.0), cwd=cwd,
+                        success_artifact=success_artifact)
     if provider == "ollama":
         return OllamaModel(name)
     if provider == "api":

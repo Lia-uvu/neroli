@@ -128,12 +128,15 @@ class RunCurationSubmissionTest(unittest.TestCase):
              mock.patch("curator.curate_rooms", return_value=["room"]), \
              mock.patch("curator._agent_persona_file", return_value=persona), \
              mock.patch("curator.export_workbench", return_value=wb), \
+             mock.patch("curator.digest_max_chars", return_value=800), \
              mock.patch("curator.cleanup_old_workbenches", return_value=[]):
-            res = curator.run_curation(conn, lambda cwd: FakeModel(), night="2026-07-06")
-        digest_row = conn.execute("SELECT body FROM digests WHERE room='room'").fetchone()
-        conn.close()
-        path.unlink(missing_ok=True)
-        return res[0], digest_row["body"] if digest_row else None
+            try:
+                res = curator.run_curation(conn, lambda cwd: FakeModel(), night="2026-07-06")
+                digest_row = conn.execute("SELECT body FROM digests WHERE room='room'").fetchone()
+                return res[0], digest_row["body"] if digest_row else None
+            finally:
+                conn.close()
+                path.unlink(missing_ok=True)
 
     def test_valid_submission_wins(self):
         r, body = self._run(GOOD, raw='{"digest": "stdout 里的旧路径", "constants": []}')
@@ -152,6 +155,10 @@ class RunCurationSubmissionTest(unittest.TestCase):
         self.assertFalse(r["submitted"])
         self.assertEqual(body, "老流程照常")
 
+    def test_no_valid_submission_is_a_hard_failure(self):
+        with self.assertRaisesRegex(RuntimeError, "no valid submission"):
+            self._run(None, raw="done, but no JSON")
+
 
 class SubmitWrapperTest(unittest.TestCase):
     """真跑一次导出的 ./submit 脚本（子进程），守 PASS/REJECTED 的行为。"""
@@ -159,7 +166,9 @@ class SubmitWrapperTest(unittest.TestCase):
     def _workbench(self):
         conn, path = _tmp_conn()
         curator_dir = Path(tempfile.mkdtemp())
-        with mock.patch.object(curator, "CURATOR_DIR", curator_dir):
+        # digest 上限烤进导出的 ./submit 脚本里；钉死 800，别让测试跟着部署 settings 漂
+        with mock.patch.object(curator, "CURATOR_DIR", curator_dir), \
+             mock.patch("curator.digest_max_chars", return_value=800):
             dest = curator.export_workbench(conn, "room", "2026-07-06", db_path=path)
         conn.close()
         path.unlink(missing_ok=True)

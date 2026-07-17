@@ -34,7 +34,7 @@ import submitcheck
 import treesnap
 from config import MEMORY, ROOM_DIRS, ROOM_SLUGS, ROOMS, fill_username, load_settings
 from db import DB, card_visible_clause, create_pipeline_run, record_model_call
-from model import ModelRunner
+from model import ModelRunner, model_attempts
 
 CURATOR_DIR = MEMORY / "data" / "curator"
 SRC_DIR = MEMORY / "src"
@@ -65,7 +65,8 @@ _RECALL_TEMPLATE = '''#!/usr/bin/env python3
 """工作台检索 wrapper：指向本目录 view.db，复用仓库 retrieval。
 
 view.db 已按房间过滤过（不可见卡不在库里、他房 private 已置空），所以 viewer=None——
-无需再过滤。子命令：search（默认）/ --top / --cluster ID / --card ID / --time START [END]。
+无需再过滤。子命令：search（默认，--expand N 直接展开前 N 条命中）/ --top /
+--cluster ID / --card ID [--around 列同 session 卡] / --time START [END]。
 """
 import sqlite3
 import sys
@@ -73,15 +74,21 @@ import types
 from pathlib import Path
 
 sys.path.insert(0, {src!r})
-# 工作台常被 agentic CLI 放进干净 Python 环境；没有 jieba 时仍应允许
-# --cluster/--card/--time 这类下钻运行，关键词搜索退化成粗分词。
+_VENDOR = str(Path({src!r}).resolve().parent / "vendor")
+if Path(_VENDOR).exists() and _VENDOR not in sys.path:
+    sys.path.insert(0, _VENDOR)
+# 工作台常被 agentic CLI 放进干净 Python 环境；先借仓库 vendor 的 jieba，
+# 真没有时仍应允许 --cluster/--card/--time 这类下钻运行，关键词搜索退化成粗分词。
 try:
     import jieba  # noqa: F401
 except ModuleNotFoundError:
     import re
 
     jieba = types.ModuleType("jieba")
-    jieba.cut = lambda text, **_kw: re.findall(r"[A-Za-z0-9_.-]+|[\\u4e00-\\u9fff]", text)
+    _cut = lambda text, **_kw: re.findall(r"[A-Za-z0-9_.-]+|[\\u4e00-\\u9fff]", text)
+    jieba.cut = _cut
+    jieba.lcut = lambda text, **kw: list(_cut(text, **kw))
+    jieba.cut_for_search = _cut
     sys.modules["jieba"] = jieba
 
 import retrieval  # noqa: E402
@@ -95,6 +102,16 @@ def _conn():
     return c
 
 
+def _detail(d):
+    print(f"== {{d.card_id}} ==  {{d.local_time}}  [{{d.room}}]")
+    print(f"theme: {{d.theme}}")
+    if d.share:
+        print(f"\\nshare: {{d.share}}")
+    if d.private:
+        print(f"\\nprivate: {{d.private}}")
+    print(f"\\ntags: {{' / '.join(d.tags) or '—'}}")
+
+
 def main():
     import argparse
     ap = argparse.ArgumentParser(description="工作台检索（view.db，已按房间过滤）")
@@ -103,6 +120,8 @@ def main():
     ap.add_argument("--top", action="store_true", help="列顶层社区")
     ap.add_argument("--cluster", metavar="ID", help="展开一个社区的时间线")
     ap.add_argument("--card", metavar="ID", help="展开一张卡的全文")
+    ap.add_argument("--around", action="store_true", help="配合 --card：列同 session 的前后卡片")
+    ap.add_argument("--expand", type=int, metavar="N", help="搜索后自动展开前 N 条命中的全文")
     ap.add_argument("--time", nargs="+", metavar="DATE", help="时间范围 START [END]")
     ap.add_argument("--since")
     ap.add_argument("--until")
@@ -123,13 +142,14 @@ def main():
         if not d:
             print(f"not found: {{args.card}}")
             return
-        print(f"== {{d.card_id}} ==  {{d.local_time}}  [{{d.room}}]")
-        print(f"theme: {{d.theme}}")
-        if d.share:
-            print(f"\\nshare: {{d.share}}")
-        if d.private:
-            print(f"\\nprivate: {{d.private}}")
-        print(f"\\ntags: {{' / '.join(d.tags) or '—'}}")
+        _detail(d)
+        if args.around:
+            sibs = retrieval.session_siblings(conn, args.card) or []
+            print(f"\\n── 同 session（{{len(sibs)}} 张）──")
+            for s in sibs:
+                mark = "→" if s.card_id == d.card_id else " "
+                rng = f"R{{s.turn_start}}–R{{s.turn_end}}" if s.turn_start is not None else "R?"
+                print(f"{{mark}} 📄 {{s.card_id}}  {{s.local_time}}  {{rng}}  {{s.theme}}")
     elif args.time:
         since = args.time[0]
         until = args.time[1] if len(args.time) > 1 else None
@@ -141,6 +161,11 @@ def main():
         if not hits:
             print("（无命中）")
         retrieval._print_cards(hits)
+        for ref in hits[: args.expand or 0]:
+            d = retrieval.card_detail(conn, ref.card_id)
+            if d:
+                print()
+                _detail(d)
     else:
         ap.print_help()
 
@@ -218,19 +243,28 @@ def curate_rooms() -> list[str]:
 
 
 def fresh_card_count(conn: sqlite3.Connection, room: str, night: str) -> int:
-    """保险拴：该 viewer 自上次快照夜以来的可见新卡数（无快照史则数全部可见卡）。
+    """保险拴：该 viewer 自上次成功 digest 以来的可见新卡数（无成功史则数全部）。
 
     为 0 的房间当晚整个跳过——不导出工作台、不调模型。fresh 分界与树报告同一条
-    （treesnap._fresh_cutoff：prev 夜的次日本地零点），保证「报告里没有新卡的线」
+    （treesnap._fresh_cutoff：成功夜的次日本地零点），保证「报告里没有新卡的线」
     和「跳过」永远一致。
     """
     visible, params = card_visible_clause(room, "c")
     sql = f"SELECT COUNT(*) FROM cards c WHERE {visible}"
-    prev = treesnap.prev_night(conn, night)
-    if prev:
+    last_success = _last_digest_night(conn, room, night)
+    if last_success:
         sql += " AND c.timestamp > ?"
-        params = [*params, treesnap._fresh_cutoff(prev)]
+        params = [*params, treesnap._fresh_cutoff(last_success)]
     return conn.execute(sql, params).fetchone()[0]
+
+
+def _last_digest_night(conn: sqlite3.Connection, room: str, night: str) -> str | None:
+    """该房间当前 night 之前最近一次真正成功落盘的 curator 夜。"""
+    row = conn.execute(
+        "SELECT MAX(night) AS n FROM digests WHERE room = ? AND night < ?",
+        (room, night),
+    ).fetchone()
+    return row["n"] if row and row["n"] else None
 
 
 def export_workbench(conn: sqlite3.Connection, room: str, night: str,
@@ -241,7 +275,11 @@ def export_workbench(conn: sqlite3.Connection, room: str, night: str,
 
     _export_view_db(conn, room, dest / "view.db", db_path)
     (dest / "tree-report.md").write_text(
-        treesnap.render_report(conn, night=night, viewer=room), encoding="utf-8"
+        treesnap.render_report(
+            conn, night=night, viewer=room,
+            fresh_after_night=_last_digest_night(conn, room, night),
+            fresh_from_success=True,
+        ), encoding="utf-8"
     )
     (dest / "constants.json").write_text(
         json.dumps(_room_constants(conn, room), ensure_ascii=False, indent=2) + "\n",
@@ -428,13 +466,40 @@ def run_curation(
         dest = export_workbench(conn, room, night, db_path)  # 含先前房间的 shared constant
         model = model_factory(str(dest))
         prompt = _fill_prompt(room, night, dest)
-        raw = model.run(prompt)
-        # 结果优先走 ./submit 落的 submission.json——wrapper 只是给模型的即时反馈，
-        # 这里的复验才是门（沙盒里绕过 submit 直接写的文件同样要过 check）。
-        parsed = _read_submission(conn, room, dest)
-        submitted = parsed is not None
-        if not submitted:
-            parsed = _parse_output(raw)  # 没提交/复验不过：退回 stdout 解析的旧路径
+        try:
+            raw = model.run(prompt)
+        except Exception as error:
+            _record_model_attempts(conn, run_id, room, prompt, model)
+            # 非标准/旧 model_factory 仍可能在 ./submit 已落盘后因空 stdout 抛错；
+            # 提交在且过复验就不算失败——submission 才是门。标准 CLIModel 已通过
+            # success_artifact 在首次 rc=0 后直接返回，不再走四次退避重试。
+            parsed = _read_submission(conn, room, dest)
+            if parsed is None:
+                record_model_call(
+                    conn, run_id, f"curate:{room}:error", prompt,
+                    f"(error: {error})", {"error": str(error)}, session_id=room,
+                )
+                conn.commit()
+                raise
+            raw = f"(stdout empty, recovered from submission.json: {error})"
+            submitted = True
+        else:
+            _record_model_attempts(conn, run_id, room, prompt, model)
+            # 结果优先走 ./submit 落的 submission.json——wrapper 只是给模型的即时反馈，
+            # 这里的复验才是门（沙盒里绕过 submit 直接写的文件同样要过 check）。
+            parsed = _read_submission(conn, room, dest)
+            submitted = parsed is not None
+            if not submitted:
+                parsed = _parse_output(raw)  # 没提交/复验不过：退回 stdout 解析的旧路径
+                known_ids = {c["constant_id"] for c in _room_constants(conn, room)}
+                errors = submitcheck.check(parsed, known_ids, max_chars=digest_max_chars())
+                if errors:
+                    record_model_call(
+                        conn, run_id, f"curate:{room}:error", prompt, raw,
+                        {"errors": errors, "parsed": parsed}, session_id=room,
+                    )
+                    conn.commit()
+                    raise RuntimeError("curator produced no valid submission: " + "; ".join(errors))
         record_model_call(conn, run_id, f"curate:{room}", prompt, raw, parsed, session_id=room)
         digest = _limit_digest(parsed.get("digest") or "")
         ops = parsed.get("constants") or []
@@ -454,6 +519,23 @@ def run_curation(
                         "constants": applied, "constants_md": bool(constants_md)})
     cleanup_old_workbenches()
     return results
+
+
+def _record_model_attempts(conn: sqlite3.Connection, run_id: str, room: str,
+                           prompt: str, model: ModelRunner) -> None:
+    """把 CLIModel 内部每次物理 subprocess 尝试单独留档，避免四次重试看成一次。"""
+    attempts = model_attempts(model)
+    for attempt in attempts:
+        stdout = str(attempt.get("stdout") or "")
+        stderr = str(attempt.get("stderr") or "")
+        meta = {k: v for k, v in attempt.items() if k not in ("stdout", "stderr")}
+        record_model_call(
+            conn, run_id, f"curate:{room}:attempt", prompt,
+            stdout or (f"(error: {stderr})" if stderr else ""), meta,
+            session_id=room,
+        )
+    if attempts:
+        conn.commit()
 
 
 def _agent_persona_file(room: str) -> Path:
@@ -518,7 +600,7 @@ def _write_digest(conn: sqlite3.Connection, room: str, night: str, body: str, mo
     )
     path = ROOM_DIRS[room] / "digest.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"# 近况（更新至 {night}）\n\n> 夜间 curator 滚动维护：有动静的线刷新，凉透的挤出。\n\n{body}\n",
+    path.write_text(f"# 近况（更新至 {night}）\n\n> 夜间 curator 滚动维护\n\n{body}\n",
                     encoding="utf-8")
 
 

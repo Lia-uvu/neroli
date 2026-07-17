@@ -15,6 +15,8 @@ bin/cli.py --rebuild-context --context-room main
 
 输出路径：`config/rooms.json` 里每个房间的 `room_dir/context-last-24.md`。出卡后默认随 `finalize_card_updates` 一起重建。
 
+日期和每条卡片前的时间按 `config/settings.json` 顶层的 `timezone` 渲染；每次重建都会重新读取该设置，无需重启 watcher。该时区下的当日标题会显示为 `--YYYY-MM-DD（今天）--`。
+
 ## 调参（config/settings.json → `context`）
 
 | 参数 | 默认 | 说明 |

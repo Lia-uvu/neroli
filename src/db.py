@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import sqlite3
 import sys
 import uuid
@@ -16,7 +17,10 @@ if VENDOR.exists() and str(VENDOR) not in sys.path:
     sys.path.insert(0, str(VENDOR))
 import jieba  # type: ignore
 
-SCHEMA_VERSION = 7
+if hasattr(jieba, "setLogLevel"):  # 工作台的 jieba 兜底 mock 没有这方法
+    jieba.setLogLevel(60)  # 静音 "Building prefix dict..."——检索是 agent 在用，噪音会混进每次输出
+
+SCHEMA_VERSION = 8
 
 DB = MEMORY / "data" / "fragments.db"
 SCHEMA = MEMORY / "config" / "schema.sql"
@@ -26,7 +30,7 @@ def connect(db_path: Path = DB) -> sqlite3.Connection:
     """打开数据库。全新文件按 schema.sql 建表；已有库只校验版本，不做运行时迁移。
 
     版本不符时报错并指向 migrations/——升级是显式的一次性操作（编号 SQL），
-    不是 connect() 里的隐式考古。历史教训见 skills/recall-pipeline/decisions.md。
+    不是 connect() 里的隐式考古。迁移规则与 runbook 见 skills/ops/common.md「schema 迁移」。
     """
     is_new = not db_path.exists() or db_path.stat().st_size == 0
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -145,7 +149,7 @@ def refresh_session_forks(conn: sqlite3.Connection, *, min_shared_turns: int | N
     keep their source_uuid, so overlap is a strong fork signal.
     """
     if min_shared_turns is None:
-        min_shared_turns = load_settings().get("ingest", {}).get("fork_min_shared_turns", 6)
+        min_shared_turns = load_settings().get("ingest", {}).get("fork_min_shared_turns", 2)
     stats = {
         r["session_id"]: dict(r)
         for r in conn.execute(
@@ -329,6 +333,37 @@ def _jieba_seg(text: str) -> str:
     return " ".join(jieba.lcut(text)) if text else ""
 
 
+def _quote_fts(tok: str) -> str:
+    return '"' + tok.replace('"', '""') + '"'
+
+
+def _jieba_query_exprs(text: str) -> tuple[list[str], list[str]]:
+    """查询侧 FTS 表达式。返回 (主词表达式列表, 平铺裸词列表)。
+
+    索引侧是 lcut 精确模式；查询词如果被 lcut 切成一整个词（如「生日礼物」），
+    索引里分开写「生日 礼物」的卡就漏了。所以多字主词再用搜索模式拆子词，
+    整词命中或子词全中都算：("生日礼物" OR ("生日" "礼物"))。
+    平铺表是主词＋所有子词的裸词（未转义），给"任一词命中"的补位查询和
+    tag 子串匹配用——调用方自己决定引号/前缀。
+    纯标点的词条丢掉，免得 AND 语义下一票否决。
+    """
+    exprs: list[str] = []
+    flat: list[str] = []
+    for tok in jieba.lcut(text):
+        tok = tok.strip()
+        if not tok or not re.search(r"\w", tok):
+            continue
+        subs = [s for s in jieba.cut_for_search(tok) if s.strip() and s != tok]
+        flat.append(tok)
+        flat.extend(subs)
+        if subs:
+            sub_expr = " ".join(_quote_fts(s) for s in subs)
+            exprs.append(f"({_quote_fts(tok)} OR ({sub_expr}))")
+        else:
+            exprs.append(_quote_fts(tok))
+    return exprs, flat
+
+
 def _has_share_expr(alias: str = "c") -> str:
     return f"NULLIF(TRIM(COALESCE({alias}.share, '')), '') IS NOT NULL"
 
@@ -407,40 +442,6 @@ def get_session_cards(conn: sqlite3.Connection, session_id: str) -> list[sqlite3
     return conn.execute(
         "SELECT * FROM cards WHERE session_id = ? ORDER BY turn_start",
         (session_id,),
-    ).fetchall()
-
-
-def search_cards(conn: sqlite3.Connection, query: str, viewer: str) -> list[sqlite3.Row]:
-    tokens = _jieba_seg(query)
-    if not tokens.strip():
-        return []
-    room = ROOM_SLUGS.get(viewer, viewer)
-    rows = conn.execute(
-        """
-        SELECT c.*, bm25(cards_fts) AS rank
-        FROM cards_fts f
-        JOIN cards c ON c.card_id = f.card_id
-        WHERE cards_fts MATCH ?
-          AND (c.room = ? OR 1)
-        ORDER BY rank
-        LIMIT 40
-        """,
-        (tokens, room),
-    ).fetchall()
-    return rows
-
-
-def search_cards_time(
-    conn: sqlite3.Connection, start: str, end: str, viewer: str,
-) -> list[sqlite3.Row]:
-    return conn.execute(
-        """
-        SELECT * FROM cards
-        WHERE timestamp >= ? AND timestamp <= ?
-        ORDER BY timestamp DESC
-        LIMIT 40
-        """,
-        (start, end),
     ).fetchall()
 
 
