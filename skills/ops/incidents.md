@@ -25,7 +25,7 @@
 
 ## codex 静默失败（模式，随时可能重演）
 
-**症状**：`context-last-24.md` 照常刷新，但不再产出新卡；auto-cards / 实体去重 /
+**症状**：`cards-last-24.md` 照常刷新，但不再产出新卡；auto-cards / 实体去重 /
 nightly curator 全部静默失败。极易误判为"一切正常"。
 
 **排查**：`data/watch.log` 里找 `No such file or directory: 'codex'`；
@@ -55,7 +55,7 @@ nightly curator 全部静默失败。极易误判为"一切正常"。
 
 ## 2026-07-15 短对话 fork 漏检 → 同一事件出两张卡
 
-**症状**：同一段短对话事件在 context-last-24 里出现两张几乎相同的卡
+**症状**：同一段短对话事件在 cards-last-24 里出现两张几乎相同的卡
 （父/子 session 各一张，相隔很短），用户确认自己没有主动 rewind/fork。
 
 **排查路径**：`--card` 展开两张卡 → 定位两份 JSONL（`~/.claude/projects/<room>/`）→
@@ -71,7 +71,7 @@ session 各拥有一整份 turns。fork 检测靠跨 session 共享 source_uuid 
 安全性论证：真 uuid 跨 session 相同只可能来自复制历史；normalized/test 家族的确定性哈希
 含 `source_file`，不跨文件撞——低阈值没有误判面。`--rebuild-forks` 后补出了此前漏掉的
 多对短 fork。本次重复卡按"留子删父"清理（删父卡，FK 级联零残留，
-`--rebuild-context` 刷新热层）——`sessions_needing_update` 里本就有"无卡父 + 子卡覆盖分叉前
+`--rebuild-cards` 刷新热层）——`sessions_needing_update` 里本就有"无卡父 + 子卡覆盖分叉前
 则不重出"的防护，这是设计内的清理路径。
 
 **遗留**：历史重复卡背账见 `data/duplicate-card-candidates.md`（含 [KEEP] 标记），待批量清理。
@@ -119,3 +119,36 @@ session 多次 `rewrite: -1 +0 cards` 后反复重出，watch.log 中还有大�
 **回归**：新增空输出保旧卡、后窗失败审计、timeout/nonzero+artifact、curator 无合法提交、
 失败传播、失败夜 fresh 续交、活/死 owner 锁回收、entity verdict 完整性测试。修复时全套
 64 测通过。
+
+## 2026-07-17 auto-cards 跨过 nightly 时段持锁，13:11 nightly 等锁超时中断
+
+**现象**：13:11 nightly 在 `[2/5] rebuild index` 等锁 60s 超时，`set -e` 中断于第 45 行
+（rebuild-index 无 continuing 兜底），报警发出。步骤 2–5 全部未跑（当日 03:05 班次正常）。
+
+**根因（后续校正）**：11:09 watch 触发的 `cli.py --auto-cards`（PID 92920）先拿锁，
+数据库审计显示该 run 的最后模型结果到 18:23 才落下，因此无法支持“业务早已完成、
+只是解释器退出挂死”的旧判断。更符合证据的解释是模型任务在 Mac 睡眠期间被整体
+挂起，醒来后继续完成；13:11 nightly 只等 60 秒就放弃，把一次正常串行竞争变成整班缺席。
+
+**处置**：进程自退、锁自动释放后，18:2x 手动补跑 nightly.sh 一班补齐索引/context/curate。
+
+**教训**：活 owner 不能被抢锁，否则会并发写库；但 nightly 是每日成功水位，也不应
+用普通前台调用的 60 秒等待上限。报警信息应带 owner PID 与持锁时长以便区分活工作和死锁。
+
+## 2026-07-20 同型复发：auto-cards 与 nightly 竞争，睡眠拉长持锁时间
+
+**症状**：13:11 nightly 再次在 `[2/5] rebuild index` 等锁 60 秒后中断，
+报警仍显示“第 45 行意外退出”。
+
+**排查**：对齐数据库审计与 `nightly.log`：auto-cards run 于 12:07 启动，
+两个模型结果分别在 16:23、16:57 落下；nightly 于 13:11 启动并在 60 秒后放弃。
+对照 07-19：当天 13:03 nightly 启动前最后一轮 auto-cards 已在 10:35 完成，因此没有锁竞争。
+
+**根因**：故障需要两个条件同时成立：auto-cards 先拿到全局锁，且运行窗口因
+模型调用/机器睡眠跨过 nightly 定时点。nightly 的 60 秒等待策略才是可稳定修复的缺口。
+
+**修复**：nightly 共享锁改为无 deadline 排队，醒来后等 auto-cards 释锁再继续；
+普通调用仍保留 60 秒上限，超时日志补 owner PID 与持锁秒数。不抢活锁，也不强杀模型任务。
+
+**回归**：锁专项 3 测通过（活 owner 不抢、死 owner 回收、nightly 无 deadline 排队）；
+全套 70 测通过。

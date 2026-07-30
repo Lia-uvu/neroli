@@ -22,9 +22,9 @@
 | **Ingest** | `loaders.py` (+`memory_types.py`) | 外部对话文件 | `messages` `turns` | 否 | [ops/ingest](skills/ops/ingest.md) |
 | **Card Gen** | `gen_cards.py` (+`model.py`) | `turns` `messages` | `cards` `card_tags` `card_raw` `cards_fts` `*_runs/calls` | 是 | [ops/card-gen](skills/ops/card-gen.md) |
 | **Index** | `graph.py` `community.py` `embedding.py` `cooccur.py` `entity_resolve.py` | `cards` `card_tags` | `clusters` `cluster_members` `entities` `tag_entity_map` | embedding 必需走 API；实体判定 LLM judge 可选（失败软降级） | [ops/index](skills/ops/index.md) |
-| **Context** | `context.py` `tempo.py` | `cards` `turns` | `<room>/context-last-24.md`（文件） | 否 | [ops/context](skills/ops/context.md) |
+| **Context** | `context.py` `tempo.py` | `cards` `turns` | `<room>/cards-last-24.md`（文件） | 否 | [ops/context](skills/ops/context.md) |
 | **Search** | `retrieval.py` | 所有表（只读） | — | 否 | [ops/search](skills/ops/search.md) |
-| **Midlayer** | `treesnap.py` `curator.py` `submitcheck.py` | `clusters` `cluster_members` `cards` `card_tags` `tag_entity_map` `entities` | `tree_snapshots` `tree_snapshot_members` `digests` `constants` + 房间文件 | treesnap 否；curator agent（阶段3）是 | [ops/midlayer](skills/ops/midlayer.md) |
+| **Midlayer** | `last24.py` `summarycheck.py` `treesnap.py` `curator.py` `submitcheck.py` | `clusters` `cluster_members` `cards` `card_tags` `tag_entity_map` `entities` | `<room>/summary-last-24.md` + `tree_snapshots` `tree_snapshot_members` `digests` `constants` + 房间文件 | last24/curator agent 是；treesnap 否 | [ops/midlayer](skills/ops/midlayer.md) |
 
 ### 边界规则
 

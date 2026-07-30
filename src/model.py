@@ -130,6 +130,12 @@ def _codex_bin() -> str:
     return "codex"
 
 
+def _minimal_instructions_config() -> str:
+    """Return a Codex config override that replaces its built-in base instructions."""
+    path = Path(__file__).resolve().parents[1] / "prompts" / "minimal-instructions.txt"
+    return f"model_instructions_file={json.dumps(str(path))}"
+
+
 def _build_codex_cmd_with_effort(model_name: str, reasoning_effort: str = "low",
                                  sandbox: str = "read-only") -> str:
     """sandbox：card-gen 等只读任务用默认 read-only；curator 要跑 ./submit 落
@@ -139,6 +145,8 @@ def _build_codex_cmd_with_effort(model_name: str, reasoning_effort: str = "low",
         [
             shlex.quote(codex_bin),
             "exec",
+            "-c",
+            shlex.quote(_minimal_instructions_config()),
             "--model",
             shlex.quote(model_name),
             "-c",
@@ -162,6 +170,8 @@ def default_codex_command(model_name: str) -> str:
         [
             shlex.quote(codex_bin),
             "exec",
+            "-c",
+            shlex.quote(_minimal_instructions_config()),
             "--model",
             shlex.quote(model_name),
             "-c",

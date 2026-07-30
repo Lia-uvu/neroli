@@ -10,7 +10,7 @@ Two pieces, both adapted to the harness you identified in preflight.
 ```sh
 #!/usr/bin/env bash
 # neroli session-start hook: emit memory files that have content
-for f in context-last-24.md digest.md constants.md kept.md todo.md; do
+for f in summary-last-24.md digest.md constants.md kept.md todo.md; do
   p="<room_dir>/$f"
   [ -s "$p" ] && printf '\n== %s ==\n' "$f" && cat "$p"
 done
@@ -28,7 +28,7 @@ Append to the room agent's instructions file (e.g. `CLAUDE.md`), wrapped in mark
 ## Memory (Neroli)
 - Search long-term memory (from `<repo-root>`): `python3 src/retrieval.py --viewer <room> "<keyword>"` — also `--top` (topic tree), `--cluster <id>`, `--card <id>`, `--time <start> [<end>]`.
 - Rhythm: short chats aren't kept, new content cards within ~1h, digest/constants update overnight — say so instead of guessing when asked why you don't remember something.
-- not: don't edit context-last-24.md / digest.md / constants.md (regenerated nightly); digest.md is a rolling summary, not history — search instead.
+- not: don't edit cards-last-24.md / summary-last-24.md / digest.md / constants.md (regenerated); digest.md is a bounded projection of the current memory tree, not history — search instead.
 <!-- yard:tools:end -->
 ```
 
@@ -40,7 +40,8 @@ Run this list **yourself** — do not walk the user through a ceremony. Skip ite
 
 - [ ] `--ingest-only` runs clean; message/turn counts grow when they chat
 - [ ] (if a custom archive source was imported) the normalize/clean script was dry-run on a sample, rerunning ingest is idempotent, and spot checks show stable `source_uuid` / `session_id` / chronological order
-- [ ] (if cards on) yesterday's cards exist; `context-last-24.md` regenerates via `--rebuild-context`
+- [ ] (if cards on) yesterday's cards exist; `cards-last-24.md` regenerates via `--rebuild-cards`
+- [ ] (if last24 summary on) `summary-last-24.md` passes the 700-character submit/recheck gate and is visible in a fresh session
 - [ ] Scheduled jobs are loaded; first nightly log ends with `nightly done`
 - [ ] Fresh session shows injected memory and a working retrieval command
 - [ ] The three transparency answers (cost / rhythm / data destination) were said out loud — if not, say them in the report

@@ -120,8 +120,10 @@ ingest 必须读完整文件（round 跨文件一次算），`--max-messages` �
 | share | jieba 分词后的 share |
 | private | jieba 分词后的 private |
 
-当前正式检索只搜 `{headline share}`，不搜 `private`，以保证关键词入口跨房间安全。
-`private` 仅在 `--card` 且 viewer 与 `cards.room` 相同时展示。Python 侧写入和查询都先过 jieba。Last24 热层只展示 `headline`。
+当前正式检索对全部可见卡搜索 `{headline share}`，并且只对 viewer 本房卡搜索
+`private`；跨房间不会拿 private 正文参与匹配。tags 是独立的补充匹配路径。
+`private` 仅在 `--card` 且 viewer 与 `cards.room` 相同时展示。Python 侧写入和查询都先过
+jieba。Last24 热层只展示 `headline`。
 
 ## clusters（Leiden index 层次社区）
 
@@ -173,7 +175,9 @@ ingest 必须读完整文件（round 跨文件一次算），`--max-messages` �
 
 ### digests（每房间每晚近况小结）
 
-由 curator agent（`cli.py --curate`）**滚动维护**（上限取 `settings.midlayer.digest_max_chars`，拿昨晚 body 当底子更新）；房间 `digest.md` 覆盖式，此表留每晚历史、并作下晚 `prev-digest.md` 的来源。
+由 curator agent（`cli.py --curate`）从当前记忆树**每夜白纸重写**，上限取
+`settings.midlayer.digest_max_tokens`（兼容旧键 `digest_max_chars`）。房间 `digest.md`
+覆盖式；此表只留每晚历史并作为“上次成功 curator”的水位，不回喂下一晚 prompt。
 
 | 字段 | 说明 |
 |------|------|

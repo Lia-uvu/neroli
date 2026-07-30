@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import subprocess
+import shlex
 import sys
 import tempfile
 import unittest
@@ -11,7 +12,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from model import CLIModel
+from model import CLIModel, _build_codex_cmd_with_effort, default_codex_command
 
 
 class CLIModelSuccessArtifactTest(unittest.TestCase):
@@ -81,6 +82,28 @@ class CLIModelSuccessArtifactTest(unittest.TestCase):
             self.assertEqual(run.call_count, 1)
             sleep.assert_not_called()
             self.assertEqual(runner.last_attempts[0]["status"], "timeout")
+
+
+class CodexCommandTest(unittest.TestCase):
+    def assert_uses_minimal_instructions(self, command: str):
+        argv = shlex.split(command)
+        overrides = [argv[i + 1] for i, arg in enumerate(argv[:-1]) if arg == "-c"]
+        instruction_overrides = [
+            value for value in overrides if value.startswith("model_instructions_file=")
+        ]
+
+        self.assertEqual(len(instruction_overrides), 1)
+        path = Path(instruction_overrides[0].split("=", 1)[1].strip('"'))
+        self.assertTrue(path.is_absolute())
+        self.assertEqual(path.read_text(encoding="utf-8"), ".\n")
+
+    def test_effort_command_replaces_codex_base_instructions(self):
+        self.assert_uses_minimal_instructions(
+            _build_codex_cmd_with_effort("gpt-test", "low")
+        )
+
+    def test_default_command_replaces_codex_base_instructions(self):
+        self.assert_uses_minimal_instructions(default_codex_command("gpt-test"))
 
 
 if __name__ == "__main__":

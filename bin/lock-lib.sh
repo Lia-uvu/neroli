@@ -4,7 +4,7 @@
 # 删除自己的 token，避免长模型任务被 300 秒误判为死锁后出现并发写库。
 
 with_lock() {
-  local tries=0 token owner owner_pid child_pid rc age mtime
+  local tries=0 token owner owner_pid child_pid rc age mtime wait_tries
   token="$$-${RANDOM:-0}-$(date +%s)"
   : "${LOCKDIR:?LOCKDIR must be set before sourcing lock-lib.sh}"
   : "${LOCK_LABEL:=lock}"
@@ -26,8 +26,11 @@ with_lock() {
         continue
       fi
     fi
-    if (( tries++ >= ${LOCK_WAIT_TRIES:-600} )); then
-      echo "[$LOCK_LABEL] lock 等待超时，跳过本次" >&2
+    wait_tries="${LOCK_WAIT_TRIES:-600}"
+    if (( wait_tries > 0 && tries++ >= wait_tries )); then
+      mtime="$(stat -f%m "$LOCKDIR" 2>/dev/null || stat -c%Y "$LOCKDIR" 2>/dev/null || date +%s)"
+      age=$(( $(date +%s) - mtime ))
+      echo "[$LOCK_LABEL] lock 等待超时（owner=${owner:-unknown}, held=${age}s），跳过本次" >&2
       return 1
     fi
     sleep 0.1

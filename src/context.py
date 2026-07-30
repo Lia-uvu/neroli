@@ -1,6 +1,6 @@
-"""Context module: render the recent-window working-memory file per room.
+"""Context module: render the recent-window event-card file per room.
 
-Reads cards from the database and writes each room's `context-last-24.md`.
+Reads cards from the database and writes each room's `cards-last-24.md`.
 Talks to storage only through the passed-in connection; does not import the
 card-gen, index, or search modules.
 """
@@ -15,10 +15,14 @@ from db import card_visible_clause
 from timefmt import configured_timezone, format_local_date_time
 
 
-def context_path_for(viewer: str) -> Path:
+def cards_path_for(viewer: str) -> Path:
     if viewer not in ROOM_DIRS:
-        raise ValueError(f"unknown room for context output: {viewer!r}")
-    return ROOM_DIRS[viewer] / "context-last-24.md"
+        raise ValueError(f"unknown room for cards output: {viewer!r}")
+    return ROOM_DIRS[viewer] / "cards-last-24.md"
+
+
+# Compatibility aliases for callers written before the output file was renamed.
+context_path_for = cards_path_for
 
 
 def rebuild_context(conn: sqlite3.Connection, viewer: str | None = None) -> None:
@@ -48,7 +52,7 @@ def rebuild_context_for(conn: sqlite3.Connection, viewer: str) -> None:
     ).fetchall()
     rows = dedupe_context_rows(conn, rows)
     lines = [
-        "# context",
+        "# cards — last 24h",
         "",
         f"最近{lookback}小时的事件卡摘要。过期条目从这里淡出，但仍留在 SQLite 中供 recall 检索；"
         f"行尾是卡片 id，`search.sh --card ID` 直接展开全文。",
@@ -64,7 +68,7 @@ def rebuild_context_for(conn: sqlite3.Connection, viewer: str) -> None:
         content = row["headline"]
         room_tag = f" [{row['room']}]" if row["room"] != room else ""
         lines.append(f"- {time_str} {content}{room_tag} ·{row['card_id']}")
-    path = context_path_for(viewer)
+    path = cards_path_for(viewer)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

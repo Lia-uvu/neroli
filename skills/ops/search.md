@@ -32,7 +32,7 @@ python3 src/retrieval.py --viewer secondary 关键词
 
 - `关键词 --expand N`：搜完自动展开前 N 条命中全文（每张计一笔 card_access）。
 - `--card ID --around`：列同 session 全部卡（turn 区间＋当前卡标记），可见性同 card_visible_clause。
-- `关键词 --sem`：向量语义检索（`retrieval.semantic_search`）。卡片向量只读 `.emb_cache`（Leiden 建树产物），query 向量缺缓存时打一次 embedding API（settings.embedding）。**隐私**：同房间用全文向量；跨房间只用 headline+share 向量——share 向量由 `scripts/backfill_share_vecs.py` 预热（幂等，新卡出现后需重跑；尚未挂 nightly），缺向量的卡静默跳过。
+- `关键词 --sem`：向量语义检索（`retrieval.semantic_search`）。卡片向量只读 `.emb_cache`（Leiden 建树产物），query 向量缺缓存时打一次 embedding API（settings.embedding）。**隐私**：同房间用全文向量；跨房间只用 headline+share 向量——share 向量由 `scripts/backfill_share_vecs.py` 预热（幂等，nightly 第 3 步补齐新卡），缺向量的卡静默跳过。
 
 ## 匹配语义（2026-07-15 起）
 

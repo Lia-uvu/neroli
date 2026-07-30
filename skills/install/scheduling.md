@@ -4,8 +4,8 @@ Three jobs, at the default times you already reported in the interview (04:00 ni
 
 | Job | Command | Cadence |
 |---|---|---|
-| Ingest | `bin/watch.sh --mode ingest` (realtime, needs fswatch) **or** cron `--ingest-only` + `--rebuild-context` | realtime / every 10–15 min |
-| Nightly | `bin/nightly.sh` (index + context + curator) | once, small hours (default 04:00) |
+| Ingest | `bin/watch.sh --mode ingest` (realtime, needs fswatch) **or** cron `--ingest-only` + `--rebuild-cards` | realtime / every 10–15 min |
+| Nightly | `bin/nightly.sh` (index + cards + last24 summary + curator) | once, small hours (default 04:00) |
 | Backup | `bin/backup-db.sh` | daily |
 
 Implement platform-native:

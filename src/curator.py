@@ -1,14 +1,15 @@
 """Midlayer 模块（三）：夜间 curator 编排。
 
 工作台导出 + 夜间 curator 调用：每房间导出过滤后的工作台，再让该房间 agent
-维护自己的 rolling digest 和 constants。
+根据当前记忆树重写 digest，并维护 constants。
 
 工作台（每晚每房间导出到 data/curator/<night>/<room>/）：
   view.db        viewer 过滤的库拷贝：不可见的卡整行不进来，他房 shared 卡 private 置空
   tree-report.md 该 viewer 的《树变化报告》（treesnap 产物）
+  tree-full-picture.md 「各主线的来路」：子簇首末卡弧线图，digest 的骨架（{tree-full-picture}）
   constants.json 现有篮子（shared 全部 + 本房 private active）
   recall         检索 wrapper，指向本目录 view.db，复用 retrieval
-  submit         提交门 wrapper：审字数/字段/constant_id，过了才落 submission.json
+  submit         提交门 wrapper：审 token 预算/字段/constant_id，过了才落 submission.json
                  （校验逻辑在 submitcheck.py，run_curation 读结果时用同一份复验）
 
 隔离靠「工作台里只有过滤后的数据」——不依赖模型自觉（proposal §未决3）。
@@ -180,7 +181,7 @@ _SUBMIT_TEMPLATE = '''#!/usr/bin/env python3
 
 用法：./submit result.json   或   cat result.json | ./submit
 校验通过打印 PASS 并落 submission.json（重复提交覆盖）；不过打印 REJECTED
-和逐条原因，改完重交。字数、字段、constant_id 都在这里审，交到 PASS 为止。
+和逐条原因，改完重交。token 预算、字段、constant_id 都在这里审，交到 PASS 为止。
 """
 import json
 import sys
@@ -206,7 +207,7 @@ def main():
         known_ids = {{c.get("constant_id") for c in basket}}
     except (OSError, ValueError):
         known_ids = None
-    errors = submitcheck.check(data, known_ids, max_chars={digest_max})
+    errors = submitcheck.check(data, known_ids, max_tokens={digest_max})
     if errors:
         print("REJECTED:")
         for e in errors:
@@ -223,9 +224,11 @@ if __name__ == "__main__":
 '''
 
 
-def digest_max_chars() -> int:
-    """滚动 digest 的注入预算（字符数）。提交门、落盘裁剪、prompt 告知共用一处。"""
-    return int(load_settings().get("midlayer", {}).get("digest_max_chars", 800))
+def digest_max_tokens() -> int:
+    """digest 的注入预算（token 估算值）。提交门、落盘裁剪、prompt 告知共用一处。
+    2026-07-19 起从字符数改为 token：字数对模型没意义，校验端配 TOKEN_SLACK 留分词余地。"""
+    mid = load_settings().get("midlayer", {})
+    return int(mid.get("digest_max_tokens", mid.get("digest_max_chars", 1000)))
 
 
 def curate_rooms() -> list[str]:
@@ -274,31 +277,28 @@ def export_workbench(conn: sqlite3.Connection, room: str, night: str,
     dest.mkdir(parents=True, exist_ok=True)
 
     _export_view_db(conn, room, dest / "view.db", db_path)
-    (dest / "tree-report.md").write_text(
-        treesnap.render_report(
-            conn, night=night, viewer=room,
-            fresh_after_night=_last_digest_night(conn, room, night),
-            fresh_from_success=True,
-        ), encoding="utf-8"
+    report = treesnap.render_report(
+        conn, night=night, viewer=room,
+        fresh_after_night=_last_digest_night(conn, room, night),
+        fresh_from_success=True,
     )
+    (dest / "tree-report.md").write_text(report, encoding="utf-8")
+    # 来路图：digest 是树的每夜投影（2026-07-19 十炉＋K 炉），主线来龙去脉的骨架就是
+    # 这张表——每个子簇给首末卡 headline 弧线，材料形状即目标形状。从本房 view.db
+    # 现算，编号保证可被工作台 ./recall 下钻。单独落盘，注入 {tree-full-picture}。
+    (dest / "tree-full-picture.md").write_text(
+        _render_mainline_paths(dest / "view.db", night), encoding="utf-8")
     (dest / "constants.json").write_text(
         json.dumps(_room_constants(conn, room), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    # 滚动 digest 的昨晚版本：取 digests 表最近一晚的 body（不读 digest.md 文件——文件带页眉）。
-    # 首夜没有则不写这个文件，prompt 里说明这种情况。
-    prev = conn.execute(
-        "SELECT body FROM digests WHERE room = ? ORDER BY night DESC LIMIT 1", (room,)
-    ).fetchone()
-    prev_path = dest / "prev-digest.md"
-    if prev and (prev["body"] or "").strip():
-        prev_path.write_text(prev["body"], encoding="utf-8")
-    elif prev_path.exists():
-        prev_path.unlink()
+    # 不再回喂昨晚 digest：树＋constants 是唯一真身，digest 每夜白纸重写（防措辞在
+    # 滚动改写里硬化变形）。digests 表照写，只存档供翻阅。
+    (dest / "prev-digest.md").unlink(missing_ok=True)
     for name, template in (("recall", _RECALL_TEMPLATE), ("submit", _SUBMIT_TEMPLATE)):
         tool = dest / name
         tool.write_text(
-            template.format(src=str(SRC_DIR.resolve()), digest_max=digest_max_chars()),
+            template.format(src=str(SRC_DIR.resolve()), digest_max=digest_max_tokens()),
             encoding="utf-8",
         )
         tool.chmod(tool.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -348,6 +348,69 @@ def _export_view_db(conn: sqlite3.Connection, room: str, dest: Path, db_path: Pa
         )
         v.commit()               # 提交 src 读事务后才能 DETACH
         v.execute("DETACH DATABASE src")
+    finally:
+        v.close()
+
+
+def _render_mainline_paths(view_db: Path, night: str) -> str:
+    """「各主线的来路」：每条顶层主线按出生时间列子簇，每个子簇给"首卡 ⇢ 末卡"的
+    headline 弧线（亮着的多带一条近况）——材料形状即目标形状，远处压缩近处详细
+    （2026-07-19 K 炉定型）。末活距 night 六天内算亮。全部编号取自 view.db 自身，
+    保证工作台 ./recall --cluster 能钻（快照层编号错位问题不波及本层）。"""
+    import datetime
+    import re as _re
+
+    bright_since = (
+        datetime.date.fromisoformat(night) - datetime.timedelta(days=6)
+    ).isoformat()
+    v = sqlite3.connect(view_db)
+    try:
+        def sub_cards(cid: str) -> list:
+            return v.execute(
+                """
+                WITH RECURSIVE sub(id) AS (
+                  SELECT ? UNION SELECT cluster_id FROM clusters, sub
+                  WHERE parent_cluster_id = sub.id)
+                SELECT c.headline, date(c.timestamp) d
+                FROM cards c JOIN cluster_members m ON c.card_id = m.card_id
+                WHERE m.cluster_id IN (SELECT id FROM sub) AND c.timestamp IS NOT NULL
+                ORDER BY c.timestamp
+                """,
+                (cid,),
+            ).fetchall()
+
+        def kw(summary: str, n: int = 4) -> str:
+            return "/".join(_re.sub(r"\(\d+\)", "", w) for w in summary.split()[:n])
+
+        lines = ["各主线的来路（子簇按时间排；⇢连着的是该段首末两张卡；编号可 ./recall --cluster 下钻）："]
+        for rid, rsum in v.execute(
+            "SELECT cluster_id, summary FROM clusters WHERE parent_cluster_id IS NULL"
+        ):
+            cards = sub_cards(rid)
+            if not cards:
+                continue
+            lines.append(f"  {rid} {kw(rsum)}  {len(cards)}卡 {cards[0][1]}起")
+            kids = []
+            for kid, ksum in v.execute(
+                "SELECT cluster_id, summary FROM clusters WHERE parent_cluster_id = ?",
+                (rid,),
+            ):
+                kc = sub_cards(kid)
+                if len(kc) >= 4:
+                    kids.append((kid, ksum, kc))
+            seen_heads: set[str] = set()
+            for kid, ksum, kc in sorted(kids, key=lambda k: k[2][0][1]):
+                lo, hi = kc[0][1], kc[-1][1]
+                bright = hi >= bright_since
+                state = f"活到{hi[5:]}" if bright else f"{hi[5:]}熄"
+                # 兄弟子簇撞首卡（聚类重叠）：换下一张没用过的当起点
+                head = next((h for h, _ in kc if h not in seen_heads), kc[0][0])
+                seen_heads.add(head)
+                lines.append(f"    {kid}（{lo[5:]}生·{state}，{len(kc)}卡）{head} ⇢ {kc[-1][0]}")
+                # 近况和末卡一字不差（重复卡）就不重复打
+                if bright and len(kc) >= 3 and kc[-2][0] != kc[-1][0]:
+                    lines.append(f"        近况：{kc[-2][0]}")
+        return "\n".join(lines) + "\n"
     finally:
         v.close()
 
@@ -423,10 +486,13 @@ def _fill_prompt(room: str, night: str, dest: Path) -> str:
     constants = _workbench_text(dest, "constants.json")
     digest = _workbench_text(dest, "prev-digest.md")
     tree_diff, tree_heat = _split_tree_report(_workbench_text(dest, "tree-report.md"))
+    # 来路图取代 heat 段进 prompt（heat 的顶层社区表冗余且编号来自快照层，来路图
+    # 编号全部来自 view.db）；{tree-heat} 留着只为兼容旧模板。
+    full_picture = _workbench_text(dest, "tree-full-picture.md")
     # {username}/{digest-max} 只在模板层替换，先于注入的工作台内容。
     template = fill_username(_prompt_template())
-    template = template.replace("{digest-max}", str(digest_max_chars())) \
-                       .replace("{digest_max}", str(digest_max_chars()))
+    template = template.replace("{digest-max}", str(digest_max_tokens())) \
+                       .replace("{digest_max}", str(digest_max_tokens()))
     body = (template
             .replace("{agent-persona}", persona)
             .replace("{agent_persona}", persona)
@@ -437,7 +503,9 @@ def _fill_prompt(room: str, night: str, dest: Path) -> str:
             .replace("{tree-diff}", tree_diff)
             .replace("{tree_diff}", tree_diff)
             .replace("{tree-heat}", tree_heat)
-            .replace("{tree_heat}", tree_heat))
+            .replace("{tree_heat}", tree_heat)
+            .replace("{tree-full-picture}", full_picture)
+            .replace("{tree_full_picture}", full_picture))
     return f"# 今晚 {night}，房间：{room}\n\n{body}"
 
 
@@ -492,7 +560,7 @@ def run_curation(
             if not submitted:
                 parsed = _parse_output(raw)  # 没提交/复验不过：退回 stdout 解析的旧路径
                 known_ids = {c["constant_id"] for c in _room_constants(conn, room)}
-                errors = submitcheck.check(parsed, known_ids, max_chars=digest_max_chars())
+                errors = submitcheck.check(parsed, known_ids, max_tokens=digest_max_tokens())
                 if errors:
                     record_model_call(
                         conn, run_id, f"curate:{room}:error", prompt, raw,
@@ -553,7 +621,7 @@ def _read_submission(conn: sqlite3.Connection, room: str, dest: Path) -> dict | 
     except (OSError, ValueError):
         return None
     known_ids = {c["constant_id"] for c in _room_constants(conn, room)}
-    ok = isinstance(data, dict) and not submitcheck.check(data, known_ids, max_chars=digest_max_chars())
+    ok = isinstance(data, dict) and not submitcheck.check(data, known_ids, max_tokens=digest_max_tokens())
     return data if ok else None
 
 
@@ -571,12 +639,13 @@ def _parse_output(text: str) -> dict:
         return {}
 
 
-def _limit_digest(text: str, max_chars: int | None = None) -> str:
-    """保证滚动 digest 不超过注入预算；优先按段落裁掉尾部。"""
-    if max_chars is None:
-        max_chars = digest_max_chars()
+def _limit_digest(text: str, max_tokens: int | None = None) -> str:
+    """保证 digest 不超过注入预算（token 估算，含校验同款宽限）；优先按段落裁掉尾部。"""
+    if max_tokens is None:
+        max_tokens = digest_max_tokens()
+    allowed = int(max_tokens * submitcheck.TOKEN_SLACK)
     digest = text.strip()
-    if len(digest) <= max_chars:
+    if submitcheck.estimate_tokens(digest) <= allowed:
         return digest
     kept: list[str] = []
     for para in re.split(r"\n{2,}", digest):
@@ -584,12 +653,12 @@ def _limit_digest(text: str, max_chars: int | None = None) -> str:
         if not para:
             continue
         candidate = "\n\n".join(kept + [para])
-        if len(candidate) > max_chars:
+        if submitcheck.estimate_tokens(candidate) > allowed:
             break
         kept.append(para)
     if kept:
         return "\n\n".join(kept)
-    return digest[:max_chars].rstrip()
+    return digest[:allowed].rstrip()
 
 
 def _write_digest(conn: sqlite3.Connection, room: str, night: str, body: str, model: str) -> None:
@@ -600,7 +669,7 @@ def _write_digest(conn: sqlite3.Connection, room: str, night: str, body: str, mo
     )
     path = ROOM_DIRS[room] / "digest.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"# 近况（更新至 {night}）\n\n> 夜间 curator 滚动维护\n\n{body}\n",
+    path.write_text(f"# 近况（更新至 {night}）\n\n> 夜间 curator 根据当前记忆树重写\n\n{body}\n",
                     encoding="utf-8")
 
 

@@ -172,8 +172,26 @@ def sessions_needing_update(conn: sqlite3.Connection) -> list[tuple[str, str]]:
     """找出有新 turns 超过最后一张卡的 session。按最近活跃排序，返回 [(session_id, room), ...]"""
     s = load_settings().get("card_gen", {})
     min_first_session_turns = s.get("min_first_session_turns", 3)
+    raw_exempt_globs = s.get("min_first_session_turns_exempt_source_globs", [])
+    if isinstance(raw_exempt_globs, str):
+        raw_exempt_globs = [raw_exempt_globs]
+    exempt_globs = [
+        pattern for pattern in raw_exempt_globs
+        if isinstance(pattern, str) and pattern
+    ] if isinstance(raw_exempt_globs, list) else []
+    exempt_clause = ""
+    if exempt_globs:
+        matches = " OR ".join("et.source_file GLOB ?" for _ in exempt_globs)
+        exempt_clause = f"""
+            OR EXISTS (
+              SELECT 1
+              FROM turns et
+              WHERE et.session_id = t.session_id
+                AND ({matches})
+            )
+        """
 
-    rows = conn.execute("""
+    rows = conn.execute(f"""
         WITH turn_stats AS (
             SELECT session_id,
                    MAX(round) as max_round,
@@ -221,6 +239,7 @@ def sessions_needing_update(conn: sqlite3.Connection) -> list[tuple[str, str]]:
                  WHEN f.child_session_id IS NOT NULL THEN COALESCE(fd.delta_round_count, 0)
                  ELSE t.round_count
                END >= ?
+            {exempt_clause}
           )
           AND NOT (
             COALESCE(c.card_count, 0) = 0
@@ -234,7 +253,7 @@ def sessions_needing_update(conn: sqlite3.Connection) -> list[tuple[str, str]]:
             )
           )
         ORDER BY last_activity DESC
-    """, (min_first_session_turns,)).fetchall()
+    """, (min_first_session_turns, *exempt_globs)).fetchall()
     results = []
     for r in rows:
         # 消息来源（source_file 落在哪个房间 project_dir）是房间的权威来源，能派生就用它——

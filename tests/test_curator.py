@@ -50,12 +50,12 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(curator._parse_output("no json here"), {})
 
     def test_digest_limit_prefers_paragraphs(self):
-        text = "第一段" + "x" * 20 + "\n\n" + "第二段" + "y" * 20 + "\n\n" + "第三段" + "z" * 20
-        limited = curator._limit_digest(text, max_chars=60)
+        # CJK 1 字≈1 token：每段 23 token，宽限线 50*1.1=55 → 留两段裁第三段
+        text = "第一段" + "这" * 20 + "\n\n" + "第二段" + "这" * 20 + "\n\n" + "第三段" + "这" * 20
+        limited = curator._limit_digest(text, max_tokens=50)
         self.assertIn("第一段", limited)
         self.assertIn("第二段", limited)
         self.assertNotIn("第三段", limited)
-        self.assertLessEqual(len(limited), 60)
 
     def test_recall_wrapper_has_jieba_fallback(self):
         self.assertIn('types.ModuleType("jieba")', curator._RECALL_TEMPLATE)
@@ -144,6 +144,12 @@ class RunCurationRenderTest(unittest.TestCase):
             "        新卡样例：Amy chose the repository license.\n",
             encoding="utf-8",
         )
+        (wb / "tree-full-picture.md").write_text(
+            "各主线的来路（子簇按时间排；⇢连着的是该段首末两张卡；编号可 ./recall --cluster 下钻）：\n"
+            "  c0001 recall-pipeline/开源  6卡 2026-06-01起\n"
+            "    c0002（06-01生·活到07-02，6卡）Amy 起了仓库 ⇢ Amy chose the repository license.\n",
+            encoding="utf-8",
+        )
         prompts = []
 
         class FakeModel:
@@ -171,7 +177,7 @@ class RunCurationRenderTest(unittest.TestCase):
         res, room_dir, _ = self._run(raw)
         digest_md = (room_dir / "digest.md").read_text(encoding="utf-8")
         self.assertIn("要点A", digest_md)
-        self.assertIn("> 夜间 curator 滚动维护\n", digest_md)
+        self.assertIn("> 夜间 curator 根据当前记忆树重写\n", digest_md)
         self.assertNotIn("有动静的线刷新", digest_md)
         self.assertEqual((room_dir / "constants.md").read_text(encoding="utf-8").strip(),
                          "# 组织版\n- 事实X")  # 模型组织版，非机械渲染
@@ -241,13 +247,18 @@ class RunCurationRenderTest(unittest.TestCase):
         self.assertEqual(len(prompts), 1)
         self.assertIn("这是你的AGENTS.md:", prompts[0])
         self.assertIn("I am Claude, Amy's long-term coding collaborator.", prompts[0])
-        self.assertIn("现在你需要维护更新这两个文件", prompts[0])
-        self.assertIn("Amy is maintaining recall-pipeline.", prompts[0])
+        self.assertIn("现在你需要维护更新constants和digest", prompts[0])
+        # 2026-07-19 起旧 digest 不回喂：工作台里残留的 prev-digest.md 也不许进 prompt
+        self.assertNotIn("Amy is maintaining recall-pipeline.", prompts[0])
         self.assertIn("今晚有新卡的线", prompts[0])
-        self.assertIn("顶层社区（卡数 / 24h新卡 / 最后活跃）", prompts[0])
+        # K 版起 heat 顶层社区表不进 prompt（编号来自快照层会错位），来路图顶上
+        self.assertNotIn("顶层社区（卡数 / 24h新卡 / 最后活跃）", prompts[0])
+        self.assertIn("各主线的来路", prompts[0])
+        self.assertIn("Amy chose the repository license.", prompts[0])
         self.assertNotIn("{agent-persona}", prompts[0])
         self.assertNotIn("{pre-digest}", prompts[0])
         self.assertNotIn("{tree-diff}", prompts[0])
+        self.assertNotIn("{tree-full-picture}", prompts[0])
 
 
 if __name__ == "__main__":

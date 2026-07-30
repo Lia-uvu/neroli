@@ -19,12 +19,12 @@ You are a coding agent installing Neroli for your user. These files are written 
 
 Neroli turns your user's agent conversations into long-term memory: raw session logs are ingested into SQLite (free, no model calls), sliced into **event cards** by a model, clustered into a topic tree (recursive Leiden), and summarized into files their agent reads at session start.
 
-Explain the **night curator** up front, because its name confuses people later: it is an optional nightly agent run, one per room, that reads what changed in the topic tree and maintains two files — a rolling ~800-character digest of the user's recent life (the character budget doubles as a forgetting mechanism) and a basket of constant facts. It is a maintainer of summaries, not a chat participant.
+Explain the **night curator** up front, because its name confuses people later: it is an optional nightly agent run, one per room, that reads the current topic tree and maintains two files — a bounded digest rewritten from the tree each night and a basket of constant facts. It is a maintainer of summaries, not a chat participant.
 
 Say the three transparency points out loud, in your own words:
 
 - **Cost.** Nothing calls a model until the switches are turned on in first-run.md. Once on: card generation is one model call per ~14 conversation rounds, triggered only when a session has ≥5 new turns and ≥60 min since its last call (defaults; see `settings.card_gen`). Night curator: at most one agent call per room per night, **skipped entirely if the room produced no new cards that day**. Backfilling history is the only potentially large expense, and it is always priced and confirmed first.
-- **Memory rhythm.** Chats of ≤2 turns are never memorized (default; `card_gen.min_first_session_turns`). New content takes up to an hour to become a card. Digest and constants update overnight. In short: *short things aren't kept, new things wait, summaries are a night behind.*
+- **Memory rhythm.** Chats of ≤2 turns are never memorized by default (`card_gen.min_first_session_turns`), unless their source file matches a configured `min_first_session_turns_exempt_source_globs` entry. New content takes up to an hour to become a card. Digest and constants update overnight. In short: *short things aren't kept unless explicitly exempted, new things wait, summaries are a night behind.*
 - **Data destination.** Storage is local SQLite. But card generation and the night curator send conversation excerpts to whatever model provider you configure, and embeddings go to the embedding endpoint (unless you pick a local Ollama backend). Local-first, not air-gapped.
 
 ## Stages — read each file when you reach it, not all upfront

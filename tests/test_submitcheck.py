@@ -30,10 +30,15 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(submitcheck.check(GOOD, set()), [])
 
     def test_digest_over_limit_reports_excess(self):
-        errors = submitcheck.check({"digest": "x" * 812, "constants": []}, set())
+        # CJK 按 1 字 1 token 估算；默认上限 1000、校验宽限 10% → 1100
+        errors = submitcheck.check({"digest": "这" * 1150, "constants": []}, set())
         self.assertEqual(len(errors), 1)
-        self.assertIn("812 字", errors[0])
-        self.assertIn("超出 12 字", errors[0])
+        self.assertIn("1150 token", errors[0])
+        self.assertIn("超出 50", errors[0])
+
+    def test_token_estimate_mixes_cjk_and_ascii(self):
+        # 4 个 CJK + 8 个 ascii → 4 + ceil(8/4) = 6
+        self.assertEqual(submitcheck.estimate_tokens("中文四字abcdefgh"), 6)
 
     def test_digest_missing_or_blank(self):
         for data in ({"constants": []}, {"digest": "  ", "constants": []}):
@@ -128,7 +133,7 @@ class RunCurationSubmissionTest(unittest.TestCase):
              mock.patch("curator.curate_rooms", return_value=["room"]), \
              mock.patch("curator._agent_persona_file", return_value=persona), \
              mock.patch("curator.export_workbench", return_value=wb), \
-             mock.patch("curator.digest_max_chars", return_value=800), \
+             mock.patch("curator.digest_max_tokens", return_value=800), \
              mock.patch("curator.cleanup_old_workbenches", return_value=[]):
             try:
                 res = curator.run_curation(conn, lambda cwd: FakeModel(), night="2026-07-06")
@@ -145,7 +150,7 @@ class RunCurationSubmissionTest(unittest.TestCase):
         self.assertEqual(r["constants"]["add"], 1)
 
     def test_invalid_submission_falls_back_to_stdout(self):
-        r, body = self._run({"digest": "x" * 900, "constants": []},
+        r, body = self._run({"digest": "这" * 1200, "constants": []},
                             raw='{"digest": "stdout 兜底", "constants": []}')
         self.assertFalse(r["submitted"])
         self.assertEqual(body, "stdout 兜底")
@@ -166,9 +171,9 @@ class SubmitWrapperTest(unittest.TestCase):
     def _workbench(self):
         conn, path = _tmp_conn()
         curator_dir = Path(tempfile.mkdtemp())
-        # digest 上限烤进导出的 ./submit 脚本里；钉死 800，别让测试跟着部署 settings 漂
+        # digest 上限（token）烤进导出的 ./submit 脚本里；钉死 800，别让测试跟着部署 settings 漂
         with mock.patch.object(curator, "CURATOR_DIR", curator_dir), \
-             mock.patch("curator.digest_max_chars", return_value=800):
+             mock.patch("curator.digest_max_tokens", return_value=800):
             dest = curator.export_workbench(conn, "room", "2026-07-06", db_path=path)
         conn.close()
         path.unlink(missing_ok=True)
@@ -187,12 +192,12 @@ class SubmitWrapperTest(unittest.TestCase):
 
         (dest / "submission.json").unlink()
         bad = dest / "bad.json"
-        bad.write_text(json.dumps({"digest": "x" * 900, "constants": []}), encoding="utf-8")
+        bad.write_text(json.dumps({"digest": "这" * 1000, "constants": []}, ensure_ascii=False), encoding="utf-8")
         out = subprocess.run([sys.executable, str(dest / "submit"), str(bad)],
                              capture_output=True, text=True)
         self.assertEqual(out.returncode, 1)
         self.assertIn("REJECTED", out.stdout)
-        self.assertIn("超出 100 字", out.stdout)
+        self.assertIn("超出 120", out.stdout)  # 1000 token，宽限线 880
         self.assertFalse((dest / "submission.json").exists())
 
     def test_reject_not_json(self):

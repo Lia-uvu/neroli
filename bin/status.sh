@@ -92,7 +92,7 @@ else
   bad "找不到生产库 $DB"
 fi
 
-# --- share 向量覆盖率（--sem 跨房间匹配的原料，nightly [3/5] 预热）---
+# --- share 向量覆盖率（--sem 跨房间匹配的原料，nightly [3/6] 预热）---
 if [[ -f "$DB" ]]; then
   missing=$(python3 "$PIPELINE/scripts/backfill_share_vecs.py" --dry-run 2>/dev/null | grep -oE '缺 share 向量 [0-9]+' | tr -dc '0-9')
   if [[ -z "$missing" ]]; then
@@ -102,7 +102,7 @@ if [[ -f "$DB" ]]; then
   elif (( missing <= 40 )); then
     note "share 向量缺 ${missing} 张（今天的新卡，等今晚 nightly 补；持续增大才是问题）"
   else
-    bad "share 向量缺 ${missing} 张 — nightly [3/5] 预热断了？--sem 跨房间在漏卡"
+    bad "share 向量缺 ${missing} 张 — nightly [3/6] 预热断了？--sem 跨房间在漏卡"
   fi
 fi
 

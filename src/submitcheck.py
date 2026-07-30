@@ -9,13 +9,28 @@ import 链越短越不容易在别人的机器上断。
 """
 from __future__ import annotations
 
-DIGEST_MAX_CHARS = 800
+import math
+import re
+
+DIGEST_MAX_TOKENS = 1000
+# 校验比 prompt 里告知的上限放宽 10%：本地估算和真实分词器有出入，余地给分词器
+TOKEN_SLACK = 1.1
 ALLOWED_KEYS = {"digest", "constants", "constants_md"}
 ALLOWED_OPS = {"add", "update", "retire"}
 
+_CJK = re.compile(r"[　-〿㐀-䶿一-鿿豈-﫿＀-￯]")
+
+
+def estimate_tokens(text: str) -> int:
+    """无依赖的 token 估算：CJK 字符按 1 token 计，其余按 4 字符 1 token。
+    偏保守（现代分词器常把常见中文双字并成一个 token），配合 TOKEN_SLACK 使用。"""
+    cjk = len(_CJK.findall(text))
+    rest = len(text) - cjk
+    return cjk + math.ceil(rest / 4)
+
 
 def check(data: object, known_ids: set[str] | None = None,
-          max_chars: int = DIGEST_MAX_CHARS) -> list[str]:
+          max_tokens: int = DIGEST_MAX_TOKENS) -> list[str]:
     """校验一份提交，返回错误列表（空列表 = 通过）。
 
     known_ids 是现有篮子的 constant_id 集合（constants.json）；传 None 跳过
@@ -33,9 +48,12 @@ def check(data: object, known_ids: set[str] | None = None,
     if not isinstance(digest, str) or not digest.strip():
         errors.append("digest 缺失或为空（每晚都要交完整的更新版全文）")
     else:
-        n = len(digest.strip())
-        if n > max_chars:
-            errors.append(f"digest {n} 字，上限 {max_chars}，超出 {n - max_chars} 字——删到线内再交")
+        n = estimate_tokens(digest.strip())
+        allowed = int(max_tokens * TOKEN_SLACK)
+        if n > allowed:
+            errors.append(
+                f"digest 约 {n} token，上限 {max_tokens}（校验宽限到 {allowed}），"
+                f"超出 {n - allowed}——压到线内再交")
 
     ops = data.get("constants", [])
     if not isinstance(ops, list):
@@ -75,7 +93,7 @@ def summary(data: dict) -> str:
     ops = data.get("constants") or []
     counts = {k: sum(1 for o in ops if isinstance(o, dict) and o.get("op") == k)
               for k in ("add", "update", "retire")}
-    parts = [f"digest {len(digest)} 字",
+    parts = [f"digest 约 {estimate_tokens(digest)} token",
              f"constants add {counts['add']} / update {counts['update']} / retire {counts['retire']}"]
     if isinstance(data.get("constants_md"), str) and data["constants_md"].strip():
         parts.append("含 constants_md 组织版")

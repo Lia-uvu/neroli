@@ -37,7 +37,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-timeout", type=float, default=240.0, help="API timeout in seconds.")
     parser.add_argument("--db", type=Path, default=DB)
     parser.add_argument("--max-messages", type=int, default=80, help="Tail limit for --dump-json convenience only; use 0 for all. Ingest always reads full files.")
-    parser.add_argument("--rebuild-context", action="store_true", help="Only rewrite <room>/context-last-24.md from existing DB.")
+    parser.add_argument("--rebuild-cards", "--rebuild-context", dest="rebuild_context",
+                        action="store_true",
+                        help="Only rewrite <room>/cards-last-24.md from existing DB.")
     parser.add_argument("--rebuild-index", action="store_true", help="Only rebuild the card index from existing cards.")
     parser.add_argument("--rebuild-forks", action="store_true", help="Only rebuild inferred session fork relationships.")
     parser.add_argument("--reroom-cards", action="store_true", help="Re-derive each card's room from its session source file and rebuild context.")
@@ -54,6 +56,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--context-room", dest="context_room", default=None, help=f"Rebuild context for one room only ({'/'.join(ROOMS)}).")
     parser.add_argument("--room", default=None, help=f"Force room tag for generated cards ({'/'.join(ROOMS)}). Default: auto-detect per session from source file.")
     parser.add_argument("--auto-cards", action="store_true", help="Check dual threshold and generate cards if conditions met.")
+    parser.add_argument("--summarize-last24", action="store_true",
+                        help="Rebuild cards-last-24 and use an agentic CLI + recall to write summary-last-24.")
+    parser.add_argument("--last24-export-workbench", action="store_true",
+                        help="Rebuild cards-last-24 and export last-24 workbenches without calling a model.")
     parser.add_argument("--curate", action="store_true", help="Midlayer full nightly: snapshot + per-room curator agent (digest + constants). Needs a model.")
     parser.add_argument("--curate-snapshot", action="store_true", help="Midlayer: snapshot tonight's cluster tree into tree_snapshots (no model).")
     parser.add_argument("--curate-dry-run", action="store_true", help="Midlayer: print the tree-change report without calling the model (tune thresholds).")
@@ -90,7 +96,7 @@ def run(argv: list[str] | None = None) -> int:
 
     if args.rebuild_context:
         rebuild_context(conn, viewer=args.context_room)
-        print("wrote <room>/context-last-24.md")
+        print("wrote <room>/cards-last-24.md")
         return 0
 
     if args.rebuild_index:
@@ -108,7 +114,7 @@ def run(argv: list[str] | None = None) -> int:
         stats = reroom_cards(conn)
         rebuild_context(conn, viewer=args.context_room)
         print(f"rerooted cards: {stats}")
-        print("wrote <room>/context-last-24.md")
+        print("wrote <room>/cards-last-24.md")
         return 0
 
     if args.list_forks:
@@ -160,6 +166,19 @@ def run(argv: list[str] | None = None) -> int:
         n = auto_generate_cards(conn, run_id, model)
         if n:
             print(f"auto-cards: updated {n} sessions")
+            run_last24_summary(conn, args, viewer=args.context_room)
+        return 0
+
+    if args.summarize_last24 or args.last24_export_workbench:
+        rebuild_context(conn, viewer=args.context_room)
+        print("wrote <room>/cards-last-24.md")
+        import last24
+        if args.last24_export_workbench:
+            rooms = last24.enabled_rooms(args.context_room)
+            for room in rooms:
+                print(f"workbench: {last24.export_workbench(conn, room, args.db)}")
+            return 0
+        run_last24_summary(conn, args, viewer=args.context_room)
         return 0
 
     if args.curate or args.curate_snapshot or args.curate_dry_run or args.curate_export_workbench:
@@ -321,13 +340,44 @@ def run(argv: list[str] | None = None) -> int:
 
     if changed:
         index_stats = finalize_card_updates(conn)
+        run_last24_summary(conn, args, viewer=args.context_room)
     else:
         rebuild_context(conn)
         index_stats = {"status": "skipped", "reason": "no card changes"}
     print(f"wrote {args.db}")
     print(f"rebuilt index: {index_stats}")
-    print("wrote <room>/context-last-24.md")
+    print("wrote <room>/cards-last-24.md")
     return 1 if failed else 0
+
+
+def run_last24_summary(conn, args: argparse.Namespace, viewer: str | None = None) -> list[dict]:
+    """Build the dedicated Sol exec used for recent summaries."""
+    import last24
+    settings = load_settings()
+    cfg = settings.get("last24_summary", {})
+    if not cfg.get("enabled", True):
+        print("last24 summary skipped (settings.last24_summary.enabled=false)")
+        return []
+    if args.provider != "cli":
+        raise RuntimeError("last24 summary requires provider=cli so recall and ./submit can run")
+    from model import _build_codex_cmd_with_effort
+    direct = bool(args.summarize_last24)
+    model_name = (args.model if direct else None) or cfg.get("model", "gpt-5.6-sol")
+    model_cmd = (args.model_cmd if direct else None) or custom_cli_cmd(model_name) or _build_codex_cmd_with_effort(
+        model_name, cfg.get("reasoning_effort", "medium"), sandbox="workspace-write")
+    timeout = float(cfg.get("timeout_seconds", 900))
+
+    def model_factory(cwd: str):
+        return build_model(
+            "cli", model_name, timeout=timeout, model_cmd=model_cmd, cwd=cwd,
+            success_artifact="submission.json")
+
+    results = last24.run_summaries(conn, model_factory, viewer=viewer, db_path=args.db)
+    for result in results:
+        via = "no-model" if not result["model"] else (
+            "submit" if result.get("submitted") else "stdout-fallback")
+        print(f"last24 {result['room']}: {result['summary_chars']}字 [{via}]")
+    return results
 
 
 def make_model(provider: str, model_name: str, args: argparse.Namespace):

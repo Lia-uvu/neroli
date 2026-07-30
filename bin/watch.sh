@@ -53,7 +53,7 @@ fswatch -0 --include='\.jsonl$' --exclude='.*' "${DIRS[@]}" | while IFS= read -r
   echo "[watch:ingest] $(date '+%H:%M:%S') 检测到变化: $session_id（全量重读房间）"
   # 串行化：重叠的 fswatch 事件不会对同一 DB 并发跑两个 ingest。
   with_lock python3 "$CLI" --ingest-only --max-messages 0 2>&1 | sed 's/^/  /'
-  with_lock python3 "$CLI" --rebuild-context 2>&1 | sed 's/^/  /'
+  with_lock python3 "$CLI" --rebuild-cards 2>&1 | sed 's/^/  /'
   if [[ -n "$AUTO_CARDS" ]]; then
     with_lock python3 "$CLI" --auto-cards 2>&1 | sed 's/^/  [auto] /' &
   fi

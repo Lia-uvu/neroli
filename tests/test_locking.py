@@ -43,6 +43,35 @@ class LockingTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse(lockdir.exists())
 
+    def test_zero_wait_tries_waits_without_deadline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lockdir = Path(tmp) / "lock.d"
+            holder = subprocess.Popen(
+                [
+                    "bash", "-c",
+                    f'LOCKDIR="{lockdir}"; LOCK_LABEL=holder; source "{LOCK_LIB}"; '
+                    'with_lock bash -c "sleep 0.2"',
+                ]
+            )
+            try:
+                for _ in range(100):
+                    if (lockdir / "owner").exists():
+                        break
+                    import time
+                    time.sleep(0.01)
+                script = (
+                    f'LOCKDIR="{lockdir}"; LOCK_LABEL=test; LOCK_WAIT_TRIES=0; '
+                    f'source "{LOCK_LIB}"; with_lock bash -c "exit 0"'
+                )
+                result = subprocess.run(
+                    ["bash", "-c", script], capture_output=True, text=True, timeout=2
+                )
+            finally:
+                holder.wait(timeout=2)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(lockdir.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

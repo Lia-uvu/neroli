@@ -8,7 +8,7 @@
 | Label | 时间 | 干什么 |
 |------|------|------|
 | `local.recall-watch-ingest` | 实时（KeepAlive） | fswatch → ingest；`watcher.auto_cards=true` 时顺带自动出卡 |
-| `local.recall-nightly` | 04:00 | 默认只聚类 + context rebuild；`nightly.generate_missing_cards=true` 时才补漏出卡 |
+| `local.recall-nightly` | 04:00 | 索引 + cards-last-24 + 可选 last24 summary + curator；`nightly.generate_missing_cards=true` 时才补漏出卡 |
 | `local.recall-backup` | 定时 | `bin/backup-db.sh`：DB .backup → 配置的备份目录 |
 
 > v3 的 `local.recall-watch-process`（实时完整管线）已废弃，plist 归档于 `attic/recall-v3-watch-process/`。出卡改由 `watcher.auto_cards` + nightly 补漏承担。
@@ -32,9 +32,13 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.recall-watch-inges
 | `fswatch` | watcher 文件监听 | `brew install fswatch` | `which fswatch` |
 | `codex` | 模型调用（出卡 / 实体去重 / curator） | ChatGPT.app 内置，或 `npm install -g @openai/codex` | `which codex` |
 
-`codex` 丢失时的表现：watcher 的 ingest 和 context rebuild 正常运行（无模型调用），但 `auto-cards`、实体去重、nightly curator 静默失败（日志报 `No such file or directory: 'codex'`）。`context-last-24.md` 照常刷新，**只是不再产出新卡**——容易误判为"一切正常"。
+`codex` 丢失时的表现：watcher 的 ingest 和 cards rebuild 正常运行（无模型调用），但 `auto-cards`、last24 summary、实体去重、nightly curator 静默失败（日志报 `No such file or directory: 'codex'`）。`cards-last-24.md` 照常刷新，**只是不再产出新卡/新 summary**——容易误判为"一切正常"。
 
 `settings.model_access.provider=cli` 且 `cli_cmd` 为空时默认走 codex；填了 `cli_cmd`（如 `claude -p`）则用自定义命令，不依赖 codex。查找顺序：`$CLAUDE_MEMORY_CODEX_BIN` → PATH → ChatGPT.app/Codex.app 内置路径 → 裸 `codex`（见 `src/model.py:_codex_bin`）。
+
+默认 codex 命令会通过 `model_instructions_file` 指向仓库内的
+`prompts/minimal-instructions.txt`（运行时解析成绝对路径），以 `.` 替换 Codex 内置的
+base instructions；卡片、实体裁判和 curator 各自的任务 prompt 仍照常从 stdin 传入。
 
 App 更新可能改变内置路径——出卡突然全部静默失败时优先查这个。
 
@@ -43,7 +47,9 @@ App 更新可能改变内置路径——出卡突然全部静默失败时优先�
 watcher 与 nightly 共用 `data/ingest.lock.d`，实现集中在 `bin/lock-lib.sh`。锁目录里的
 `owner` 记录实际子进程 PID 和本轮 token：PID 仍活着就永不按运行时长抢锁（curator 单次
 timeout 可达 900 秒，不能再用旧的 300 秒年龄阈值）；owner 已死才回收。释放时必须 token
-匹配，旧任务不能删除后来任务的锁。默认最多等约 60 秒，超时让当前步骤非零退出。
+匹配，旧任务不能删除后来任务的锁。普通调用默认最多等约 60 秒，超时日志会带 owner PID
+与持锁时长；nightly 设置为持续排队，避免白天出卡先拿锁、或 Mac 中途睡眠
+拉长任务墙钟时间时，整班夜间维护因 60 秒竞争超时而取消。
 
 手工清锁前先读 `data/ingest.lock.d/owner` 并用 `kill -0 PID` 确认进程确实不存在；活进程
 禁止直接删锁，否则可能让两个出卡/curator 同时写库。
@@ -110,7 +116,7 @@ recall-pipeline/
 ├── config/
 │   ├── rooms.json          # 房间唯一事实源
 │   ├── settings.json       # 可调参数
-│   └── schema.sql          # v7 建表 DDL（只用于新库）
+│   └── schema.sql          # v9 建表 DDL（只用于新库）
 ├── prompts/
 │   ├── agent-persona-<room>.md
 │   └── gen-cards-prompt.md
@@ -118,7 +124,7 @@ recall-pipeline/
 ├── bin/
 │   ├── cli.py              # 外层 wrapper（加 src/ 到 sys.path）
 │   ├── watch.sh            # fswatch 实时监听
-│   ├── nightly.sh          # 凌晨 4 点：Leiden index + context rebuild
+│   ├── nightly.sh          # 凌晨 4 点：index + cards + last24 summary + curator
 │   └── backup-db.sh        # DB 在线备份
 ├── skills/
 │   ├── install/            # 安装 Skill
@@ -127,10 +133,11 @@ recall-pipeline/
 ├── data/
 │   ├── fragments.db        # 生产库（schema v9）
 │   ├── backups/ .emb_cache/ watch.log nightly.log
-├── migrations/             # 002…007-midlayer.sql
+├── migrations/             # 002…009（已有库的显式 schema 迁移）
 ├── tests/                  # 本地回归测试；公开库不带
 ├── ARCHITECTURE.md         # 模块地图（总枢纽）
 └── schema.md               # 表结构速查
 ```
 
-context 输出到 `config/rooms.json` 里每个房间的 `room_dir/context-last-24.md`。
+recent cards 输出到 `config/rooms.json` 里每个房间的 `room_dir/cards-last-24.md`；
+配置的 summary agent 所写核实版短小结输出到 `room_dir/summary-last-24.md`。

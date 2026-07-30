@@ -91,7 +91,7 @@ EOF
     { plist_head "$PREFIX.ingest"
       cat <<EOF
   <key>ProgramArguments</key>
-  <array><string>/bin/bash</string><string>-c</string><string>cd '$PIPELINE' &amp;&amp; python3 bin/cli.py --ingest-only --max-messages 0 &amp;&amp; python3 bin/cli.py --rebuild-context</string></array>
+  <array><string>/bin/bash</string><string>-c</string><string>cd '$PIPELINE' &amp;&amp; python3 bin/cli.py --ingest-only --max-messages 0 &amp;&amp; python3 bin/cli.py --rebuild-cards</string></array>
   <key>StartInterval</key><integer>$((INTERVAL_MIN * 60))</integer>
 </dict>
 </plist>

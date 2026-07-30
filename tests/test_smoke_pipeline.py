@@ -131,7 +131,7 @@ class SmokePipelineTest(unittest.TestCase):
 
         # --- context rebuild (into temp room dir) ---
         context.rebuild_context(conn)
-        context_file = self.room_dir / "context-last-24.md"
+        context_file = self.room_dir / "cards-last-24.md"
         self.assertTrue(context_file.exists())
         body = context_file.read_text(encoding="utf-8")
         self.assertIn("讨论用 Leiden 聚类事件卡", body)

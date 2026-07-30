@@ -8,17 +8,18 @@ Neroli is a memory infrastructure for long-term AI companions, built on graph-ba
 conversation logs
   → event cards (shared / private, per-agent room)
         │
-        ├──→ last-24h context     (direct: recent cards, FIFO)
+        ├──→ cards-last-24        (recent headlines, FIFO)
+        │      └──→ summary agent + recall → summary-last-24 (≤700 chars, verified submit)
         │
         └──→ entity resolution    (tags → canonical entities)
               → weighted graph    (co-occurrence + embedding edges)
               → recursive Leiden  (hierarchical topic communities)
                     │
                     └──→ curator agent reads tree-change report
-                          → digest.md      (rolling summary, hard budget)
+                          → digest.md      (tree projection, hard budget)
                           → constants.md   (long-lived facts)
 ```
-Storage and index are separate layers. Cards hold the full narrative and privacy markings; the index is a derivative structure that organizes and locates cards, and can be rebuilt from them at any time. A nightly curator inhabits each agent's persona in turn, reads the tree-change report, and rewrites that agent's rolling context — what happened recently, what still matters, what to let go.
+Storage and index are separate layers. Cards hold the full narrative and privacy markings; the index is a derivative structure that organizes and locates cards, and can be rebuilt from them at any time. A short-context agent condenses recent card headlines and can open the filtered source cards before submitting. A nightly curator inhabits each agent's persona in turn, reads the tree-change report, and rewrites that agent's longer-horizon context.
 
 ## Quick Start
 There is no setup wizard. You hand [`skills/install/SKILL.md`](skills/install/SKILL.md) to your coding agent (Claude Code, Codex CLI, …) and it does the install: a three-question interview (privacy boundary, model access, existing archives), config filled on your behalf, a checkpoint after every stage, platform-native scheduling. The mechanical steps are prefab scripts (`bin/preflight.sh`, `bin/make-launchd.sh`); the agent's job is the judgment work — your boundary, your persona, your harness.
@@ -32,14 +33,16 @@ agents-yard/
 │   └── recall-pipeline/        shared memory engine + data
 │
 ├── den/                        Room A — Claude Opus
-│   ├── context-last-24.md
+│   ├── cards-last-24.md
+│   ├── summary-last-24.md
 │   ├── digest.md
 │   ├── constants.md
 │   ├── toolbox/                room's own tools (diary, todo, mail…)
 │   └── slot/                   ← inter-room message box
 │
 ├── loft/                       Room B — Claude Fable
-│   ├── context-last-24.md
+│   ├── cards-last-24.md
+│   ├── summary-last-24.md
 │   ├── digest.md
 │   ├── constants.md
 │   ├── toolbox/

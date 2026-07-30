@@ -21,7 +21,7 @@ You are a coding agent maintaining an existing Neroli install. Start here when t
 | Ingest | [ingest.md](ingest.md) | `--ingest-only`, Claude.ai import |
 | Card Gen | [card-gen.md](card-gen.md) | `--process-existing`, `--auto-cards`, models, prompts |
 | Index | [index.md](index.md) | `--rebuild-index`, Leiden, embeddings |
-| Context | [context.md](context.md) | `--rebuild-context`, last-24 |
+| Context | [context.md](context.md) | `--rebuild-cards`, `--summarize-last24`, last-24 |
 | Search | [search.md](search.md) | `src/retrieval.py`, retrieval |
 | Midlayer | [midlayer.md](midlayer.md) | `--curate-snapshot`, `--curate-dry-run`, `--curate-export-workbench`, tree snapshots, per-room switches |
 | Cross-module / runtime | [common.md](common.md) | launchd, migrations, backups, file layout |
@@ -40,7 +40,7 @@ You are a coding agent maintaining an existing Neroli install. Start here when t
 | Card-generation logic | `src/gen_cards.py` | [card-gen.md](card-gen.md) |
 | Clustering / index behavior | `src/graph.py`, `src/community.py`, etc. | [index.md](index.md) |
 | Search behavior | `src/retrieval.py` | [search.md](search.md) |
-| `context-last-24.md` rebuild behavior | `src/context.py` | [context.md](context.md) |
+| `cards-last-24.md` / `summary-last-24.md` behavior | `src/context.py` + `src/last24.py` | [context.md](context.md) |
 | Night tree snapshots, digests, constants, per-room switches | `src/treesnap.py`, `src/curator.py`, `config/settings.json` -> `midlayer` | [midlayer.md](midlayer.md) |
 | SQLite connections, ingest writes, FTS, audit, visibility predicate | `src/db.py` | [common.md](common.md) |
 
