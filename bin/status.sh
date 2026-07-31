@@ -21,11 +21,17 @@ mtime_of() { stat -f %m "$1" 2>/dev/null || echo 0; }
 
 # --- launchd 任务在不在 ---
 jobs="$(launchctl list 2>/dev/null | grep -E 'recall|neroli' || true)"
-watch_line="$(echo "$jobs" | grep -E 'watch' || true)"
-if [[ -n "$watch_line" ]] && [[ "$(echo "$watch_line" | awk '{print $1}')" != "-" ]]; then
-  ok "watcher 进程活着 (pid $(echo "$watch_line" | awk '{print $1}'))"
+ingest_line="$(echo "$jobs" | grep -E '(watch-ingest|neroli\.watch|neroli\.ingest)' | head -1 || true)"
+cards_line="$(echo "$jobs" | grep -E '(watch-cards|neroli\.cards)' | head -1 || true)"
+if [[ -n "$ingest_line" ]] && [[ "$(echo "$ingest_line" | awk '{print $1}')" != "-" ]]; then
+  ok "ingest watcher 活着 (pid $(echo "$ingest_line" | awk '{print $1}'))"
 else
-  bad "watcher 没有活进程 — launchctl list | grep -E 'recall|neroli' 查看；重启见 skills/ops/common.md"
+  bad "ingest watcher 没有活进程 — launchctl list | grep -E 'recall|neroli' 查看；重启见 skills/ops/common.md"
+fi
+if [[ -n "$cards_line" ]] && [[ "$(echo "$cards_line" | awk '{print $1}')" != "-" ]]; then
+  ok "card watcher 活着 (pid $(echo "$cards_line" | awk '{print $1}'))"
+else
+  bad "card watcher 没有活进程 — turns 变化不会唤醒白天 Card Gen；重启见 skills/ops/common.md"
 fi
 for kind in nightly backup; do
   if echo "$jobs" | grep -q "$kind"; then
@@ -63,6 +69,12 @@ if [[ -f "$DB" ]]; then
     ok "schema v$actual (与 src/db.py 一致)"
   else
     bad "schema 版本不符: 库=v$actual 代码=v$expected — 有迁移没跑，见 migrations/"
+  fi
+  turns_revision=$(sqlite3 "$DB" "SELECT revision FROM change_watermarks WHERE name='turns';" 2>/dev/null)
+  if [[ "$turns_revision" =~ ^[0-9]+$ ]]; then
+    ok "turns DB 水位可读 (revision $turns_revision)"
+  else
+    bad "turns DB 水位缺失 — schema v10 migration 是否完整？"
   fi
 
   read -r turns24 cards24 <<< "$(sqlite3 -separator ' ' "$DB" "

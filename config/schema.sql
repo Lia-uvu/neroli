@@ -1,3 +1,4 @@
+-- schema v10（2026-07-31，turns 来源无关变更水位，供白天 Card Gen watcher 轮询）
 -- schema v9（2026-07-17，事件卡字段 theme 更名为 headline，含 cards_fts）
 -- schema v8（2026-07-11，卡片取用日志 card_access：read-heat，重量用「被重新拿起」度量）
 -- schema v7（2026-07-02，中期层/馆员：树快照 + 近况总结 + constant 篮子）。设计见 docs/proposal-20260702-midlayer-tree-privacy.md。
@@ -20,7 +21,7 @@
 -- 暂未含（待设计）：profile 画像注入层；embedding 向量索引。（constant 篮子已在 v7 落表）
 
 PRAGMA journal_mode = WAL;
-PRAGMA user_version = 9;
+PRAGMA user_version = 10;
 
 CREATE TABLE IF NOT EXISTS pipeline_runs (
   id TEXT PRIMARY KEY,
@@ -74,6 +75,45 @@ CREATE TABLE IF NOT EXISTS turns (
 CREATE INDEX IF NOT EXISTS turns_session_order_idx ON turns(session_id, round, message_seq, line_no);
 CREATE INDEX IF NOT EXISTS turns_source_uuid_idx   ON turns(source_uuid);
 CREATE INDEX IF NOT EXISTS messages_timestamp_idx  ON messages(timestamp);
+
+-- 原始层变更水位：所有 adapter 最终都写 messages/turns；Card Gen 的白天 watcher
+-- 只看 turns revision，不依赖 Claude Code、Claude.ai 或未来来源各自的文件/API 事件。
+CREATE TABLE IF NOT EXISTS change_watermarks (
+  name       TEXT PRIMARY KEY,
+  revision   INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT OR IGNORE INTO change_watermarks (name, revision) VALUES ('turns', 0);
+
+CREATE TRIGGER IF NOT EXISTS turns_watermark_after_insert
+AFTER INSERT ON turns
+BEGIN
+  UPDATE change_watermarks
+  SET revision = revision + 1, updated_at = CURRENT_TIMESTAMP
+  WHERE name = 'turns';
+END;
+
+CREATE TRIGGER IF NOT EXISTS turns_watermark_after_update
+AFTER UPDATE ON turns
+WHEN OLD.session_id IS NOT NEW.session_id
+  OR OLD.source_uuid IS NOT NEW.source_uuid
+  OR OLD.round IS NOT NEW.round
+  OR OLD.message_seq IS NOT NEW.message_seq
+  OR OLD.source_file IS NOT NEW.source_file
+  OR OLD.line_no IS NOT NEW.line_no
+BEGIN
+  UPDATE change_watermarks
+  SET revision = revision + 1, updated_at = CURRENT_TIMESTAMP
+  WHERE name = 'turns';
+END;
+
+CREATE TRIGGER IF NOT EXISTS turns_watermark_after_delete
+AFTER DELETE ON turns
+BEGIN
+  UPDATE change_watermarks
+  SET revision = revision + 1, updated_at = CURRENT_TIMESTAMP
+  WHERE name = 'turns';
+END;
 
 -- 原始层·会话分叉：Claude 撤回/重发或手动 fork 时，新 session 会复制旧 transcript，
 -- 共享 source_uuid。child 出卡时只处理 delta_start_round 之后的新增分支内容。

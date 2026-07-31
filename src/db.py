@@ -20,7 +20,7 @@ import jieba  # type: ignore
 if hasattr(jieba, "setLogLevel"):  # 工作台的 jieba 兜底 mock 没有这方法
     jieba.setLogLevel(60)  # 静音 "Building prefix dict..."——检索是 agent 在用，噪音会混进每次输出
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 DB = MEMORY / "data" / "fragments.db"
 SCHEMA = MEMORY / "config" / "schema.sql"

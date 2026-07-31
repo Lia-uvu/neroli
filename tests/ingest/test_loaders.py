@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
 from loaders import load_messages_for_ingest  # noqa: E402
@@ -176,3 +176,28 @@ class LoaderCharacterizationTest(unittest.TestCase):
         self.assertTrue(first[0].source_uuid.startswith("normalized:"))
         self.assertEqual("normalized-session", first[0].session_id)
         self.assertEqual(7, first[0].round)
+
+    def test_normalized_native_identity_survives_spool_path_changes(self):
+        item = {
+            "role": "assistant",
+            "round": 1,
+            "text": "stable reply",
+            "timestamp": "2026-07-31T12:00:00Z",
+            "session_id": "porch-session",
+            "source": "porch",
+            "source_native_id": "entry-1",
+            "source_parent_id": "entry-0",
+            "source_model": "provider/model",
+        }
+        left = self.root / "left.json"
+        right = self.root / "right.json"
+        left.write_text(json.dumps([item]), encoding="utf-8")
+        right.write_text(json.dumps([item]), encoding="utf-8")
+
+        left_message = load_messages_for_ingest([left])[0]
+        right_message = load_messages_for_ingest([right])[0]
+
+        self.assertEqual(left_message.source_uuid, right_message.source_uuid)
+        self.assertEqual(left_message.parent_uuid, right_message.parent_uuid)
+        self.assertEqual(left_message.source, "porch")
+        self.assertEqual(left_message.model, "provider/model")

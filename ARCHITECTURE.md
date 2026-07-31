@@ -26,6 +26,14 @@
 | **Search** | `retrieval.py` | 所有表（只读） | — | 否 | [ops/search](skills/ops/search.md) |
 | **Midlayer** | `last24.py` `summarycheck.py` `treesnap.py` `curator.py` `submitcheck.py` | `clusters` `cluster_members` `cards` `card_tags` `tag_entity_map` `entities` | `<room>/summary-last-24.md` + `tree_snapshots` `tree_snapshot_members` `digests` `constants` + 房间文件 | last24/curator agent 是；treesnap 否 | [ops/midlayer](skills/ops/midlayer.md) |
 
+### 白天运行时边界
+
+Ingest adapter 只负责把各自来源规范化后写入统一的 `messages` / `turns`。SQLite 在
+`turns` 的实际 INSERT / UPDATE / DELETE 上维护 `change_watermarks.turns`；独立的
+`bin/watch-cards.sh` 轮询这个数据库水位并调用编排层已有的 `--auto-cards`。因此 Card Gen
+不依赖 Claude Code 的 fswatch，也不要求每个未来 adapter 额外 import 或调用 Card Gen。
+nightly 是独立的冷 session 补漏、index、last24、curator 流程，不承担白天唤醒职责。
+
 ### 边界规则
 
 - 模块只能依赖：**存储层**（`db`）、**叶子工具**（`config`/`timefmt`/`memory_types`/`model`）、**本模块内部文件**（如 Index 内 community→graph→embedding）。
@@ -37,6 +45,28 @@
 - Midlayer 内部 `curator → treesnap` 属本模块内依赖（允许）。curator 导出到工作台的 `recall`
   wrapper 是独立入口脚本、在工作台里 import Search 门面（`retrieval`），属工具面而非模块跨 import。
 
+### 测试地图
+
+测试跟随其拥有的模块；`contracts/` 只验证 Neroli 自己的公开数据库边界，不引用具体
+source adapter 的实现或私人目录。
+
+```text
+tests/
+├── ingest/       loader 与增量摄入
+├── card_gen/     出卡解析、失败安全与 session eligibility
+├── index/        图索引与实体解析
+├── search/       检索、可见性与相邻卡
+├── midlayer/     last24、tree snapshot、curator 与 submission gate
+├── runtime/      lock、model runner 与叶子工具
+└── contracts/    来源独立、turns 水位与跨模块 smoke contract
+```
+
+完整测试：
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
 ---
 
 设计原理、架构决策、废弃方案的详细讲解文档整理中，尚未随仓库发布。
@@ -45,4 +75,4 @@
 
 - **[skills/ops/SKILL.md](skills/ops/SKILL.md)** — 运维 Skill：按模块导航 + 「改哪里」表
 - **[skills/ops/](skills/ops/)** — 各模块运维 Skill：ingest / card-gen / index / context / search / common
-- **[schema.md](schema.md)** — SQLite v7 表结构（messages/turns + Leiden index + midlayer）
+- **[schema.md](schema.md)** — SQLite v10 表结构（messages/turns 水位 + Leiden index + midlayer）

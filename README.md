@@ -6,18 +6,20 @@ Neroli is a memory infrastructure for long-term AI companions, built on graph-ba
 
 ```txt
 conversation logs
-  → event cards (shared / private, per-agent room)
-        │
-        ├──→ cards-last-24        (recent headlines, FIFO)
-        │      └──→ summary agent + recall → summary-last-24 (≤700 chars, verified submit)
-        │
-        └──→ entity resolution    (tags → canonical entities)
-              → weighted graph    (co-occurrence + embedding edges)
-              → recursive Leiden  (hierarchical topic communities)
-                    │
-                    └──→ curator agent reads tree-change report
-                          → digest.md      (tree projection, hard budget)
-                          → constants.md   (long-lived facts)
+  → messages / turns
+      └──→ DB turns watermark → daytime Card Gen (source-independent)
+            └──→ event cards (shared / private, per-agent room)
+                  │
+                  ├──→ cards-last-24        (recent headlines, FIFO)
+                  │      └──→ summary agent + recall → summary-last-24 (≤700 chars, verified submit)
+                  │
+                  └──→ entity resolution    (tags → canonical entities)
+                        → weighted graph    (co-occurrence + embedding edges)
+                        → recursive Leiden  (hierarchical topic communities)
+                              │
+                              └──→ curator agent reads tree-change report
+                                    → digest.md      (tree projection, hard budget)
+                                    → constants.md   (long-lived facts)
 ```
 Storage and index are separate layers. Cards hold the full narrative and privacy markings; the index is a derivative structure that organizes and locates cards, and can be rebuilt from them at any time. A short-context agent condenses recent card headlines and can open the filtered source cards before submitting. A nightly curator inhabits each agent's persona in turn, reads the tree-change report, and rewrites that agent's longer-horizon context.
 
@@ -57,7 +59,7 @@ The system is iterated on agent feedback, so the primary users of the memory are
 ## Documentation
 - [ARCHITECTURE.md](ARCHITECTURE.md) — module map, data flow, boundary rules
 - [skills/ops/SKILL.md](skills/ops/SKILL.md) — operations skill and index ("what do I edit to change X")
-- [schema.md](schema.md) — SQLite schema v9 reference
+- [schema.md](schema.md) — SQLite schema v10 reference
 
 ## FAQ
 **Where does my data go?**

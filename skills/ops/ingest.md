@@ -17,7 +17,9 @@ python3 scripts/ingest_claude_ai_exports.py --dry-run
 python3 scripts/ingest_claude_ai_exports.py
 ```
 
-实时 ingest 由 launchd watcher 自动跑（见 [common.md](common.md)）。
+Claude Code 的实时 ingest 由 launchd fswatch watcher 自动跑（见 [common.md](common.md)）。
+其他来源可以有各自的 adapter / 调度；所有来源最终只写统一的 `messages` / `turns`。schema v10
+在 `turns` 上维护来源无关的变更水位，独立白天 card watcher 因而无需知道是哪一个 adapter 写入。
 
 ## 增量 ingest（`settings.watcher.incremental_ingest`，默认开）
 
@@ -36,10 +38,13 @@ watcher 的全房间重读默认走增量：只重读 mtime 变过的文件，**
 加载按来源家族路由（`load_messages_for_ingest`），三族的 `source_uuid` / `session_id` / 排序规则见 [schema.md](../../schema.md) 「三个 source 家族」：
 
 - **Claude Code JSONL** — `~/.claude/projects/<room>/*.jsonl`，watcher 实时 tail 已配置的 room
-- **Claude.ai 导出** — `backups/origin-data/**/conversations.json`，一次性手动 backfill
-- **normalized / test** — `*.json` / `*.txt`，确定性哈希 id，dev/test 用
+- **Claude.ai 导出** — `backups/origin-data/**/conversations.json`，一次性手动 backfill；写入 turns 后同样抬 DB 水位
+- **normalized adapter / test** — `*.json` 可以携带 `source`、`source_native_id`、
+  `source_parent_id`、`source_model`；native identity 会跨 spool 路径保持幂等。没有这些
+  字段的旧 normalized JSON 与 `*.txt` 继续使用 path/content 确定性哈希。
 
-> 接其他对话源（Codex / Open Claw 等）：只要产出 messages/turns 需要的字段即可，给你的 agent 看 schema.md 让它写一个适配脚本。
+> 接其他对话源：优先产出带 adapter native identity 的 normalized JSON；不要在 adapter
+> 里额外耦合 Card Gen。adapter 自己保留原生 session，Neroli 只消费公开 ingest contract。
 
 ## 新来源 / 清洗脚本
 

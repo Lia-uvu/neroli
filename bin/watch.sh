@@ -5,8 +5,8 @@ set -euo pipefail
 #
 # 用法：
 #   watch.sh --mode ingest    # 只洗数据入 turns 表，零模型调用（launchd KeepAlive 常驻）
-#                             # 出卡不在此实时触发：白天靠 settings.watcher.auto_cards，
-#                             # 冷 session 靠 local.recall-nightly 补漏
+#                             # 出卡不在此触发：独立 watch-cards.sh 轮询 DB turns 水位；
+#                             # 冷 session 仍靠 nightly 补漏
 #
 # 依赖：fswatch (brew install fswatch)
 
@@ -32,7 +32,6 @@ if ! command -v fswatch &>/dev/null; then
 fi
 
 DEBOUNCE=$(python3 -c "import json;print(json.load(open('$PIPELINE/config/settings.json')).get('watcher',{}).get('ingest_debounce_seconds',5))")
-AUTO_CARDS=$(python3 -c "import json;print('1' if json.load(open('$PIPELINE/config/settings.json')).get('watcher',{}).get('auto_cards',False) else '')")
 LOCKDIR="$PIPELINE/data/ingest.lock.d"
 LOCK_LABEL="watch"
 source "$PIPELINE/bin/lock-lib.sh"
@@ -54,7 +53,4 @@ fswatch -0 --include='\.jsonl$' --exclude='.*' "${DIRS[@]}" | while IFS= read -r
   # 串行化：重叠的 fswatch 事件不会对同一 DB 并发跑两个 ingest。
   with_lock python3 "$CLI" --ingest-only --max-messages 0 2>&1 | sed 's/^/  /'
   with_lock python3 "$CLI" --rebuild-cards 2>&1 | sed 's/^/  /'
-  if [[ -n "$AUTO_CARDS" ]]; then
-    with_lock python3 "$CLI" --auto-cards 2>&1 | sed 's/^/  [auto] /' &
-  fi
 done

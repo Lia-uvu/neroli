@@ -101,9 +101,10 @@
   },
 
   "watcher": {
-    "_comment": "Realtime ingest daemon (bin/watch.sh). auto_cards: whether the watcher also triggers card generation after ingest (thresholds still apply). incremental_ingest: only re-read files whose mtime changed plus files sharing a session with them; state in data/ingest-state.json — set false or delete that file to force a full re-read.",
+    "_comment": "Daytime daemons. bin/watch.sh watches Claude Code files only to ingest them. bin/watch-cards.sh polls the source-independent SQLite turns watermark; auto_cards controls whether a watermark change invokes card generation (card_gen thresholds still apply). card_poll_seconds is the DB poll interval. incremental_ingest only affects the Claude Code scanner: re-read files whose mtime changed plus files sharing a session with them; state in data/ingest-state.json — set false or delete that file to force a full re-read.",
     "ingest_debounce_seconds": 5,
     "auto_cards": true,
+    "card_poll_seconds": 5,
     "incremental_ingest": true
   },
 

@@ -39,6 +39,26 @@ bin/cli.py --auto-cards --dry-run
 | `init_rounds` | 14 | 首次窗口大小（轮） |
 | `grow_rounds` | 14 | 后续每次追加的轮数 |
 
+## 白天实时唤醒（与 nightly 分开）
+
+`bin/watch-cards.sh` 不监听任何单一来源文件；它轮询 schema v10 的
+`change_watermarks(name='turns')`。SQLite trigger 只在 `turns` 业务字段实际增删改时递增
+revision，所以 cards/index 写同一个 DB 不会自触发，幂等重扫也不会虚假唤醒。
+
+水位变化后 watcher 调用现成的 `--auto-cards`，仍受上表的 5 rounds、60 分钟和每次最多
+10 sessions 等闸门约束。一次水位变化只触发一次检查；与旧 fswatch 行为一致，冷却时间到期
+本身不会制造新事件，下一次 `turns` 变化或 nightly 才会再检查。
+
+开关和轮询间隔在 `settings.watcher`：
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `auto_cards` | true | 是否在 DB turns 水位变化时调用模型出卡 |
+| `card_poll_seconds` | 5 | 水位轮询间隔 |
+
+nightly 仍独立负责冷 session 补漏、index、last24 与 curator；不要把白天 watcher 合并进
+nightly，也不要让新 adapter 直接调用 Card Gen。adapter 只需正确写 `messages` / `turns`。
+
 ## 模型配置
 
 默认模型：GPT-5.5 via Codex CLI，`reasoning_effort=low`。

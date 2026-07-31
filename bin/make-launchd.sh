@@ -11,6 +11,7 @@
 #   --ingest-interval MIN  periodic ingest every MIN minutes instead of the
 #                          fswatch realtime watcher (for machines without fswatch)
 #   --no-ingest            skip the ingest job entirely
+#   --no-card-watch        skip the source-independent DB card watcher
 set -euo pipefail
 
 PIPELINE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -20,6 +21,7 @@ NIGHTLY="04:00"
 BACKUP="04:40"
 INGEST_MODE="fswatch"   # fswatch | interval | none
 INTERVAL_MIN=15
+CARD_WATCH=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -29,6 +31,7 @@ while [ $# -gt 0 ]; do
     --backup)          BACKUP="$2"; shift 2 ;;
     --ingest-interval) INGEST_MODE="interval"; INTERVAL_MIN="$2"; shift 2 ;;
     --no-ingest)       INGEST_MODE="none"; shift ;;
+    --no-card-watch)   CARD_WATCH=0; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -101,6 +104,21 @@ EOF
     ;;
   none) ;;
 esac
+
+if (( CARD_WATCH )); then
+  f="$DIR/$PREFIX.cards.plist"
+  { plist_head "$PREFIX.cards"
+    cat <<EOF
+  <key>ProgramArguments</key>
+  <array><string>$PIPELINE/bin/watch-cards.sh</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict>
+</plist>
+EOF
+  } > "$f"
+  written="$written$f"$'\n'
+fi
 
 emit_calendar "$PREFIX.nightly" "'$PIPELINE/bin/nightly.sh'" "$NIGHTLY"
 emit_calendar "$PREFIX.backup"  "'$PIPELINE/bin/backup-db.sh'" "$BACKUP"

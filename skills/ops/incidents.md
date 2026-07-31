@@ -88,7 +88,7 @@ prompt 写得越听话，runner 越觉得它失败——协议冲突，不是模
 
 **修复**：build_model/CLIModel 新增显式 `success_artifact` 参数，curator 传
 `submission.json`；rc=0 且产物文件存在则首次调用即返回，上层照旧复验。新增
-tests/test_model.py 守住两侧："有产物一次返回、无产物照旧四次重试"。实跑验收时运行时长
+tests/runtime/test_model.py 守住两侧："有产物一次返回、无产物照旧四次重试"。实跑验收时运行时长
 未出现退避。注意：当时两个房间的 `model_calls` 各 1 行只代表逻辑完成，旧审计还不能证明物理调用次数；同日后续
 加固才新增 `:attempt` 逐次记录。
 

@@ -298,6 +298,26 @@ def load_normalized_items(data: Any, path: Path) -> list[Message]:
         if not text:
             continue
         timestamp = item.get("timestamp") or ""
+        session_id = item.get("session_id") or path.stem
+        source = item.get("source") or "opus-legacy"
+        native_id = str(item.get("source_native_id") or "").strip()
+        native_parent_id = str(item.get("source_parent_id") or "").strip()
+        if native_id:
+            # Adapter-owned native identity makes retries idempotent across spool paths.
+            # Include source + session so two adapters or sessions cannot collide.
+            source_uuid = _normalized_native_id(source, session_id, native_id)
+            parent_uuid = (
+                _normalized_native_id(source, session_id, native_parent_id)
+                if native_parent_id
+                else ""
+            )
+        else:
+            # Backward-compatible path for older normalized arrays without a
+            # declared adapter identity.
+            source_uuid = _deterministic_id(
+                "normalized", str(path), idx, role, timestamp, text
+            )
+            parent_uuid = ""
         seq_by_round[round_no] = seq_by_round.get(round_no, 0) + 1
         messages.append(
             Message(
@@ -305,14 +325,17 @@ def load_normalized_items(data: Any, path: Path) -> list[Message]:
                 speaker=user_name() if role == "user" else agent_name(),
                 text=text,
                 timestamp=timestamp,
-                session_id=item.get("session_id") or path.stem,
+                session_id=session_id,
                 seq=len(messages) + 1,
                 round=round_no,
                 label=turn_label(round_no, role),
                 source_file=str(path),
-                source_uuid=_deterministic_id("normalized", str(path), idx, role, timestamp, text),
+                source=source,
+                source_uuid=source_uuid,
+                parent_uuid=parent_uuid,
                 message_seq=seq_by_round[round_no],
                 line_no=idx,
+                model=item.get("source_model") or item.get("model") or "",
             )
         )
     return messages
@@ -354,6 +377,13 @@ def load_test_transcript(path: Path) -> list[Message]:
 def _deterministic_id(prefix: str, source_file: str, index: int, role: str, timestamp: str, text: str) -> str:
     digest = hashlib.sha256(f"{source_file}|{index}|{role}|{timestamp}|{text}".encode("utf-8")).hexdigest()
     return f"{prefix}:{digest[:32]}"
+
+
+def _normalized_native_id(source: str, session_id: str, native_id: str) -> str:
+    digest = hashlib.sha256(
+        f"{source}|{session_id}|{native_id}".encode("utf-8")
+    ).hexdigest()
+    return f"normalized-native:{digest[:32]}"
 
 
 # ── 共享文本/内容处理 ───────────────────────────────────────────────────────

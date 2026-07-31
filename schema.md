@@ -1,8 +1,8 @@
-# recall-pipeline 表结构（schema v9）
+# recall-pipeline 表结构（schema v10）
 
 > 改 db.py 或 schema.sql 时查这个。
 >
-> **版本机制**：`PRAGMA user_version = 9`。connect() 只校验版本不做迁移；
+> **版本机制**：`PRAGMA user_version = 10`。connect() 只校验版本不做迁移；
 > 升级写 `migrations/NNN-*.sql`（手动 `sqlite3 db < 迁移文件`），并同步 schema.sql 和本文档。
 
 ## 原始层（v4：内容与发生分离）
@@ -22,7 +22,7 @@ v3 的单表 `turns` 有数据完整性 bug：`UNIQUE(session_id, round, role)` 
 |------|------|-------------|------------|------|----------|
 | Claude Code JSONL | `~/.claude/projects/<room>/*.jsonl` | 顶层 `uuid` | 顶层 `sessionId` | 文件追加序（多文件→最早ts再 line_no） | **live**，watcher 实时 tail 已配置的 room |
 | Claude.ai 导出 | `backups/origin-data/**/conversations.json` | `chat_messages[].uuid`（原生） | 会话 `uuid` | 消息 `created_at` + 数组下标 | **archive**，一次性手动 backfill，不 watch |
-| normalized / test | `*.json` / `*.txt` | `normalized:`/`test:` 确定性哈希 | 显式 / `path.stem` | 自带显式 `round` | dev/test |
+| normalized adapter / test | `*.json` / `*.txt` | 有 `source_native_id` 时按 source+session+native id 稳定哈希；旧格式为 `normalized:`/`test:` path/content 哈希 | 显式 / `path.stem` | 自带显式 `round` | adapter snapshot / dev/test |
 
 加载分两阶段：candidate 加载器抽字段带 sort_key（不定 round）→ `assign_rounds` 对全量先按
 `(session_id, source_uuid)` 去重再分会话编号。入口 `load_messages_for_ingest(paths)` 按家族路由。
@@ -57,6 +57,19 @@ ingest 必须读完整文件（round 跨文件一次算），`--max-messages` �
 | created_at | **INGEST 时间**（非对话时间）；recency 一律用 messages.timestamp |
 
 `UNIQUE(session_id, source_uuid)` — 同一 uuid 在一个会话只一行；全量重读用 DO UPDATE 自纠 round/seq。
+
+## change_watermarks（原始层变更水位，v10）
+
+| 字段 | 说明 |
+|------|------|
+| name | 水位名；当前固定为 `turns` |
+| revision | `turns` 实际 INSERT / UPDATE / DELETE 时单调递增 |
+| updated_at | 最近一次水位变化的数据库时间 |
+
+SQLite triggers 维护水位。幂等 ingest 的 `ON CONFLICT DO UPDATE` 若业务字段没有实际变化，不递增；
+cards、index、context 等派生层写入也不递增。白天 `bin/watch-cards.sh` 只轮询这个水位，因此
+Claude Code、Claude.ai/API 或未来 adapter 无论从哪里写入，只要最终改变 `turns`，都会走同一个
+Card Gen 唤醒入口。
 
 ## cards（事件卡，派生层核心）
 
