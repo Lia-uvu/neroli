@@ -3,10 +3,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
+import loaders  # noqa: E402
 from loaders import load_messages_for_ingest  # noqa: E402
 
 
@@ -201,3 +203,132 @@ class LoaderCharacterizationTest(unittest.TestCase):
         self.assertEqual(left_message.parent_uuid, right_message.parent_uuid)
         self.assertEqual(left_message.source, "porch")
         self.assertEqual(left_message.model, "provider/model")
+
+    def test_v2_namespaces_sessions_globally_and_reuses_message_identity_across_forks(self):
+        def envelope(native_session_id, native_parent_session_id=None):
+            return {
+                "format": "neroli-normalized-v2",
+                "source": "fake-adapter",
+                "source_route": "resident-entry",
+                "messages": [
+                    {
+                        "native_session_id": native_session_id,
+                        "native_parent_session_id": native_parent_session_id,
+                        "native_message_id": "shared-message",
+                        "role": "user",
+                        "text": "shared history",
+                        "occurred_at": "2026-07-31T12:00:00Z",
+                        "source_sequence": 0,
+                    }
+                ],
+            }
+
+        left = self.root / "left.json"
+        right = self.root / "right.json"
+        left.write_text(json.dumps(envelope("native-a")), encoding="utf-8")
+        right.write_text(
+            json.dumps(envelope("native-b", "native-a")), encoding="utf-8"
+        )
+
+        with mock.patch.object(loaders, "room_for_source_route", return_value="den"):
+            first = load_messages_for_ingest([left])[0]
+            copied = load_messages_for_ingest([right])[0]
+
+        self.assertNotEqual(first.session_id, copied.session_id)
+        self.assertTrue(first.session_id.startswith("session:"))
+        self.assertEqual(first.source_uuid, copied.source_uuid)
+        self.assertTrue(first.source_uuid.startswith("message:"))
+        self.assertEqual(copied.parent_session_id, first.session_id)
+        self.assertEqual(copied.room, "den")
+
+    def test_v2_derives_rounds_from_stable_source_sequence(self):
+        envelope = {
+            "format": "neroli-normalized-v2",
+            "source": "fake-adapter",
+            "source_route": "resident-entry",
+            "messages": [
+                {
+                    "native_session_id": "session-a",
+                    "native_message_id": "assistant-2",
+                    "native_parent_message_id": "user-2",
+                    "role": "assistant",
+                    "text": "second answer",
+                    "occurred_at": "2026-07-31T12:00:03Z",
+                    "source_sequence": 3,
+                    "provider": "fake-provider",
+                    "model": "fake-model",
+                },
+                {
+                    "native_session_id": "session-a",
+                    "native_message_id": "user-1",
+                    "role": "user",
+                    "text": "first question",
+                    "occurred_at": "2026-07-31T12:00:00Z",
+                    "source_sequence": 0,
+                },
+                {
+                    "native_session_id": "session-a",
+                    "native_message_id": "assistant-1",
+                    "native_parent_message_id": "user-1",
+                    "role": "assistant",
+                    "text": "first answer",
+                    "occurred_at": "2026-07-31T12:00:01Z",
+                    "source_sequence": 1,
+                },
+                {
+                    "native_session_id": "session-a",
+                    "native_message_id": "user-2",
+                    "native_parent_message_id": "assistant-1",
+                    "role": "user",
+                    "text": "second question",
+                    "occurred_at": "2026-07-31T12:00:02Z",
+                    "source_sequence": 2,
+                },
+            ],
+        }
+        path = self.root / "ordered.json"
+        path.write_text(json.dumps(envelope), encoding="utf-8")
+
+        with mock.patch.object(loaders, "room_for_source_route", return_value="loft"):
+            messages = load_messages_for_ingest([path])
+
+        self.assertEqual(
+            ["user-1", "assistant-1", "user-2", "assistant-2"],
+            [m.native_message_id for m in messages],
+        )
+        self.assertEqual([1, 1, 2, 2], [m.round for m in messages])
+        self.assertEqual([1, 2, 1, 2], [m.message_seq for m in messages])
+        self.assertEqual("fake-provider", messages[-1].provider)
+
+    def test_v2_rejects_unknown_route_and_mutable_identity(self):
+        envelope = {
+            "format": "neroli-normalized-v2",
+            "source": "unknown-adapter",
+            "source_route": "unknown-route",
+            "messages": [],
+        }
+        with self.assertRaisesRegex(ValueError, "no ingest.source_routes policy"):
+            loaders.load_normalized_items(envelope, self.root / "unknown.json")
+
+        envelope["source"] = "fake-adapter"
+        envelope["messages"] = [
+            {
+                "native_session_id": "one",
+                "native_message_id": "same",
+                "role": "user",
+                "text": "first",
+                "occurred_at": "2026-07-31T12:00:00Z",
+                "source_sequence": 0,
+            },
+            {
+                "native_session_id": "two",
+                "native_message_id": "same",
+                "role": "user",
+                "text": "changed",
+                "occurred_at": "2026-07-31T12:00:00Z",
+                "source_sequence": 0,
+            },
+        ]
+        with mock.patch.object(loaders, "room_for_source_route", return_value="den"):
+            with self.assertRaisesRegex(ValueError, "immutable native_message_id"):
+                loaders.load_normalized_items(envelope, self.root / "changed.json")

@@ -73,9 +73,14 @@
   },
 
   "ingest": {
-    "_comment": "fork_min_shared_turns: two sessions sharing >= this many source_uuid rows are treated as a fork. Cross-session uuid equality only comes from copied history (desktop interrupt+resend forks silently), and normalized/test hashes include source_file so they can't collide across files — a low threshold is safe; short forked chats slip past higher values and produce duplicate cards. origin_data_dir (optional): archive directory of claude.ai web exports for scripts/ingest_claude_ai_exports.py; leave empty if unused.",
+    "_comment": "source_routes is the private instance policy mapping adapter-owned source + source_route to a configured room; unknown v2 routes are rejected instead of falling back to the default room. fork_min_shared_turns: sessions sharing at least this many canonical source_uuid rows are treated as a fork. origin_data_dir (optional): Claude.ai export archive; leave empty if unused.",
     "fork_min_shared_turns": 2,
-    "origin_data_dir": ""
+    "origin_data_dir": "",
+    "source_routes": {
+      "example-adapter": {
+        "example-route": "main"
+      }
+    }
   },
 
   "backup": {

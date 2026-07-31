@@ -19,7 +19,7 @@
 
 | 模块 | 文件 | 读 | 写 | 需要模型 | 运维 |
 |------|------|----|----|---------|------|
-| **Ingest** | `loaders.py` (+`memory_types.py`) | 外部对话文件 | `messages` `turns` | 否 | [ops/ingest](skills/ops/ingest.md) |
+| **Ingest** | `loaders.py` (+`memory_types.py`) | 外部对话文件 | `source_sessions` `messages` `turns` | 否 | [ops/ingest](skills/ops/ingest.md) |
 | **Card Gen** | `gen_cards.py` (+`model.py`) | `turns` `messages` | `cards` `card_tags` `card_raw` `cards_fts` `*_runs/calls` | 是 | [ops/card-gen](skills/ops/card-gen.md) |
 | **Index** | `graph.py` `community.py` `embedding.py` `cooccur.py` `entity_resolve.py` | `cards` `card_tags` | `clusters` `cluster_members` `entities` `tag_entity_map` | embedding 必需走 API；实体判定 LLM judge 可选（失败软降级） | [ops/index](skills/ops/index.md) |
 | **Context** | `context.py` `tempo.py` | `cards` `turns` | `<room>/cards-last-24.md`（文件） | 否 | [ops/context](skills/ops/context.md) |
@@ -33,6 +33,11 @@ Ingest adapter 只负责把各自来源规范化后写入统一的 `messages` / 
 `bin/watch-cards.sh` 轮询这个数据库水位并调用编排层已有的 `--auto-cards`。因此 Card Gen
 不依赖 Claude Code 的 fswatch，也不要求每个未来 adapter 额外 import 或调用 Card Gen。
 nightly 是独立的冷 session 补漏、index、last24、curator 流程，不承担白天唤醒职责。
+
+新 adapter 使用 [`neroli-normalized-v2`](docs/normalized-adapter-contract.md)：adapter 交
+native session/message identity、不可变原文、UTC 发生时间和稳定来源顺序；Neroli 生成
+canonical ID 与 round。adapter 的 `source_route` 只描述入口，本机私有
+`ingest.source_routes` policy 才能把它绑定到 room；未知 route 拒绝入库，不回退默认房间。
 
 ### 边界规则
 
@@ -75,4 +80,4 @@ python3 -m unittest discover -s tests -v
 
 - **[skills/ops/SKILL.md](skills/ops/SKILL.md)** — 运维 Skill：按模块导航 + 「改哪里」表
 - **[skills/ops/](skills/ops/)** — 各模块运维 Skill：ingest / card-gen / index / context / search / common
-- **[schema.md](schema.md)** — SQLite v10 表结构（messages/turns 水位 + Leiden index + midlayer）
+- **[schema.md](schema.md)** — SQLite v11 表结构（canonical adapter provenance + messages/turns 水位 + Leiden index + midlayer）

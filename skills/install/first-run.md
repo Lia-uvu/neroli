@@ -15,7 +15,7 @@ sqlite3 data/fragments.db "PRAGMA user_version;
   SELECT (SELECT COUNT(*) FROM messages), (SELECT COUNT(*) FROM turns);"
 ```
 
-user_version is `10`; both counts are > 0 (assuming the project dirs contain history). Zero counts with existing `.jsonl` files means `project_dir` is wrong — go back to configure.md.
+user_version is `11`; both counts are > 0 (assuming the project dirs contain history). Zero counts with existing `.jsonl` files means `project_dir` is wrong — go back to configure.md.
 
 ## Room files
 

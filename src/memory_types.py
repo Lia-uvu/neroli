@@ -15,7 +15,7 @@ class Message:
     label: str
     source_file: str = ""
     source: str = "opus-legacy"
-    # v4：内容与发生分离。source_uuid 是全局去重键（Claude 两族用原生 id，normalized/test 用确定性哈希）。
+    # v4：内容与发生分离。v2 adapter 用 source+native_message_id 的 canonical hash。
     source_uuid: str = ""
     parent_uuid: str = ""
     message_seq: int = 1  # 轮内位置：user=1，assistant=2..N
@@ -23,6 +23,14 @@ class Message:
     has_image: int = 0
     image_count: int = 0
     model: str = ""        # 官方 model id 原样（messages.model）
+    provider: str = ""     # adapter 提交的原始 provider（messages.provider）
+    native_message_id: str = ""
+    native_parent_message_id: str = ""
+    native_session_id: str = ""
+    native_parent_session_id: str = ""
+    parent_session_id: str = ""  # Neroli canonical parent session id
+    source_route: str = ""
+    room: str = ""         # 本机 ingestion policy 的解析结果，不由 adapter 直接指定
 
 
 @dataclass

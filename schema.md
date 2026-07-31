@@ -1,8 +1,8 @@
-# recall-pipeline 表结构（schema v10）
+# recall-pipeline 表结构（schema v11）
 
 > 改 db.py 或 schema.sql 时查这个。
 >
-> **版本机制**：`PRAGMA user_version = 10`。connect() 只校验版本不做迁移；
+> **版本机制**：`PRAGMA user_version = 11`。connect() 只校验版本不做迁移；
 > 升级写 `migrations/NNN-*.sql`（手动 `sqlite3 db < 迁移文件`），并同步 schema.sql 和本文档。
 
 ## 原始层（v4：内容与发生分离）
@@ -22,11 +22,27 @@ v3 的单表 `turns` 有数据完整性 bug：`UNIQUE(session_id, round, role)` 
 |------|------|-------------|------------|------|----------|
 | Claude Code JSONL | `~/.claude/projects/<room>/*.jsonl` | 顶层 `uuid` | 顶层 `sessionId` | 文件追加序（多文件→最早ts再 line_no） | **live**，watcher 实时 tail 已配置的 room |
 | Claude.ai 导出 | `backups/origin-data/**/conversations.json` | `chat_messages[].uuid`（原生） | 会话 `uuid` | 消息 `created_at` + 数组下标 | **archive**，一次性手动 backfill，不 watch |
-| normalized adapter / test | `*.json` / `*.txt` | 有 `source_native_id` 时按 source+session+native id 稳定哈希；旧格式为 `normalized:`/`test:` path/content 哈希 | 显式 / `path.stem` | 自带显式 `round` | adapter snapshot / dev/test |
+| normalized adapter v2 | `*.json` envelope | `sha256(source + native_message_id)` | `sha256(source + native_session_id)` | 按 `source_sequence` 排序，再由 Neroli 推导 round | adapter snapshot / live spool |
+| legacy normalized / test | `*.json` array / `*.txt` | 旧 source+session+native id 或 path/content 哈希 | 显式 / `path.stem` | adapter 显式 round | compatibility / dev |
 
 加载分两阶段：candidate 加载器抽字段带 sort_key（不定 round）→ `assign_rounds` 对全量先按
 `(session_id, source_uuid)` 去重再分会话编号。入口 `load_messages_for_ingest(paths)` 按家族路由。
 ingest 必须读完整文件（round 跨文件一次算），`--max-messages` 仅供 `--dump-json` 查看。
+v2 完整字段、ID 公式、不可变与路由规则见
+[`docs/normalized-adapter-contract.md`](docs/normalized-adapter-contract.md)。
+
+## source_sessions（adapter session provenance，v11）
+
+仅 `neroli-normalized-v2` session 写此表；旧来源继续从 `turns.source_file` 派生 room。
+
+| 字段 | 说明 |
+|------|------|
+| session_id | Neroli canonical session ID，PK |
+| source / native_session_id | adapter namespace 与原生 session identity；组合唯一 |
+| native_parent_session_id / parent_session_id | 原生与 canonical 父 session，可为空 |
+| source_route | adapter 的稳定入口标签，不是 room |
+| room | 本机私有 `ingest.source_routes` policy 的解析结果 |
+| created_at / updated_at | 首次与最近一次接收时间 |
 
 ## messages（去重后的规范内容）
 
@@ -38,8 +54,10 @@ ingest 必须读完整文件（round 跨文件一次算），`--max-messages` �
 | text | 消息正文（只取 type==text 的 block） |
 | timestamp | ISO 8601 UTC，唯一时间真相，流入 cards.timestamp |
 | parent_uuid | 父消息 uuid（重建会话树用） |
-| source | 模型/消息来源短标签：user / assistant / model-alias 等；空间归属看 cards.room |
+| source | v2 为 adapter namespace；旧来源为 user / model-alias 等历史标签。空间归属不由此字段直接决定 |
+| provider | v2 adapter 提交的原始 provider，可空 |
 | model | 官方 model id 原样 |
+| native_message_id / native_parent_message_id | v2 adapter 的原生不可变 identity/provenance |
 | has_image / image_count | 该消息含图片 block 数 |
 | created_at | 入库时间 |
 

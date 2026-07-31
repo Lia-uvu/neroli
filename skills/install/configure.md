@@ -17,6 +17,12 @@ cd src && python3 -c "import config; print(config.ROOMS, config.user_name())" &&
 
 prints your room names and the user's name. An exception here means malformed JSON or a missing room dir — fix before continuing.
 
+If an external adapter will ingest `neroli-normalized-v2`, add an explicit private
+`settings.ingest.source_routes` mapping for every accepted `(source, source_route)`.
+The route label comes from the adapter; the room comes only from this local policy.
+Do not add a catch-all/default mapping. Confirm an unknown route fails before enabling
+the adapter. See `docs/normalized-adapter-contract.md`.
+
 ## Secrets
 
 If anything needs an API key, write `.env` at the repo root (auto-loaded by the engine; `KEY=value` lines):

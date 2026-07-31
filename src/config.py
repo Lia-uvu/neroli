@@ -35,6 +35,29 @@ def room_for_source_file(source_file: str | None) -> str | None:
     return None
 
 
+def room_for_source_route(source: str, source_route: str) -> str:
+    """Resolve an adapter-owned route through this instance's private policy.
+
+    The adapter declares where an event came from; only the local Neroli instance
+    decides which privacy room that route belongs to. Unknown routes are hard
+    failures so private material never falls through to DEFAULT_ROOM.
+    """
+    routes = load_settings().get("ingest", {}).get("source_routes", {})
+    source_map = routes.get(source) if isinstance(routes, dict) else None
+    room = source_map.get(source_route) if isinstance(source_map, dict) else None
+    if not isinstance(room, str) or not room:
+        raise ValueError(
+            f"no ingest.source_routes policy for source={source!r}, "
+            f"source_route={source_route!r}"
+        )
+    if room not in ROOMS:
+        raise ValueError(
+            f"ingest.source_routes maps source={source!r}, "
+            f"source_route={source_route!r} to unknown room {room!r}"
+        )
+    return room
+
+
 def load_settings() -> dict:
     return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
 

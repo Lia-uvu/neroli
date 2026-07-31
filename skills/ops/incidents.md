@@ -68,7 +68,7 @@ session 各拥有一整份 turns。fork 检测靠跨 session 共享 source_uuid 
 从门槛底下漏过 → 两个 session 都被当独立会话全量出卡。
 
 **修复**：阈值 6→2（settings.json / settings.example.json / db.py 默认值三处同步）。
-安全性论证：真 uuid 跨 session 相同只可能来自复制历史；normalized/test 家族的确定性哈希
+安全性论证：真 uuid 跨 session 相同只可能来自复制历史；legacy normalized/test 的确定性哈希
 含 `source_file`，不跨文件撞——低阈值没有误判面。`--rebuild-forks` 后补出了此前漏掉的
 多对短 fork。本次重复卡按"留子删父"清理（删父卡，FK 级联零残留，
 `--rebuild-cards` 刷新热层）——`sessions_needing_update` 里本就有"无卡父 + 子卡覆盖分叉前

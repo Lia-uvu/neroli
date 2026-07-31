@@ -39,7 +39,7 @@ Append to the room agent's instructions file (e.g. `CLAUDE.md`), wrapped in mark
 Run this list **yourself** — do not walk the user through a ceremony. Skip items for features left off; then give the user a short report of what passed and what's enabled:
 
 - [ ] `--ingest-only` runs clean; message/turn counts grow when they chat
-- [ ] (if a custom archive source was imported) the normalize/clean script was dry-run on a sample, rerunning ingest is idempotent, and spot checks show stable `source_uuid` / `session_id` / chronological order
+- [ ] (if a custom archive source was imported) the normalize/clean script was dry-run on a sample, rerunning ingest is idempotent, and spot checks show stable native IDs, canonical `source_uuid` / `session_id`, resolved room policy, and source order
 - [ ] (if cards on) yesterday's cards exist; `cards-last-24.md` regenerates via `--rebuild-cards`
 - [ ] (if last24 summary on) `summary-last-24.md` passes the 700-character submit/recheck gate and is visible in a fresh session
 - [ ] Scheduled jobs are loaded; first nightly log ends with `nightly done`

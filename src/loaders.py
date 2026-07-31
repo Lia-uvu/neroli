@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import json
 import re
@@ -7,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from config import agent_name, user_name, user_source_label
+from config import agent_name, room_for_source_route, user_name, user_source_label
 from memory_types import Message
 
 # ── v4 两阶段加载 ───────────────────────────────────────────────────────────
@@ -21,14 +22,15 @@ from memory_types import Message
 # 三个 source 家族：
 #   * Claude Code JSONL  — source_uuid=顶层 uuid，session_id=顶层 sessionId，按文件追加序排
 #   * Claude.ai 导出      — source_uuid=chat_messages[].uuid（原生），session_id=会话 uuid，按消息序排
-#   * normalized / test  — 无原生 id，用确定性哈希；自带显式 round，绕过 assign_rounds
+#   * normalized v2     — canonical native id；按 source_sequence 统一 assign_rounds
+#   * legacy normalized / test — 旧确定性哈希与显式 round，兼容保留
 
 
 def load_messages_for_ingest(paths: list[Path]) -> list[Message]:
     """ingest / dump-json 的统一入口：按家族路由到 candidate 加载器，合并后一次性编号。
 
     一次调用可混合家族（v4 重建会把 JSONL 房间和导出归档一起灌）——去重和分会话编号
-    对并集天然正确。normalized/test 自带 round，直接产出 Message，不进 assign_rounds。
+    对并集天然正确。normalized v2 也走 assign_rounds；只有 legacy normalized/test 保留显式 round。
     """
     candidates: list[dict[str, Any]] = []
     explicit: list[Message] = []
@@ -275,18 +277,30 @@ def _candidate_to_message(c: dict[str, Any], round_no: int, message_seq: int, se
         has_image=c.get("has_image", 0),
         image_count=c.get("image_count", 0),
         model=c.get("model", ""),
+        provider=c.get("provider", ""),
+        native_message_id=c.get("native_message_id", ""),
+        native_parent_message_id=c.get("native_parent_message_id", ""),
+        native_session_id=c.get("native_session_id", ""),
+        native_parent_session_id=c.get("native_parent_session_id", ""),
+        parent_session_id=c.get("parent_session_id", ""),
+        source_route=c.get("source_route", ""),
+        room=c.get("room", ""),
     )
 
 
-# ── normalized / test：自带显式 round，确定性 source_uuid，绕过 assign_rounds ──
+# ── normalized v2 + legacy normalized/test ───────────────────────────────
 
 def load_normalized_json(path: Path) -> list[Message]:
     return load_normalized_items(json.loads(path.read_text(encoding="utf-8")), path)
 
 
 def load_normalized_items(data: Any, path: Path) -> list[Message]:
+    if isinstance(data, dict) and data.get("format") == "neroli-normalized-v2":
+        return load_normalized_v2(data, path)
     if not isinstance(data, list):
-        raise ValueError(f"expected a JSON array in {path}")
+        raise ValueError(
+            f"expected a legacy JSON array or neroli-normalized-v2 envelope in {path}"
+        )
     messages: list[Message] = []
     seq_by_round: dict[int, int] = {}
     for idx, item in enumerate(data, start=1):
@@ -341,6 +355,136 @@ def load_normalized_items(data: Any, path: Path) -> list[Message]:
     return messages
 
 
+def load_normalized_v2(data: dict[str, Any], path: Path) -> list[Message]:
+    """Strict source-neutral adapter contract.
+
+    Adapters submit native immutable identity and stable source order. Neroli
+    namespaces IDs, derives conversational rounds, and applies the local room
+    routing policy. The adapter cannot choose a room directly.
+    """
+    source = _required_string(data, "source", path)
+    source_route = _required_string(data, "source_route", path)
+    room = room_for_source_route(source, source_route)
+    items = data.get("messages")
+    if not isinstance(items, list):
+        raise ValueError(f"neroli-normalized-v2 messages must be an array in {path}")
+
+    candidates: list[dict[str, Any]] = []
+    positions: set[tuple[str, int]] = set()
+    identities: dict[str, tuple[str, str, str, str]] = {}
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise ValueError(f"message {index} must be an object in {path}")
+        role = item.get("role")
+        if role not in {"user", "assistant"}:
+            raise ValueError(f"message {index} has invalid role {role!r} in {path}")
+        text = _required_string(item, "text", path, index=index)
+        native_session_id = _required_string(
+            item, "native_session_id", path, index=index
+        )
+        native_message_id = _required_string(
+            item, "native_message_id", path, index=index
+        )
+        occurred_at = _utc_timestamp(
+            _required_string(item, "occurred_at", path, index=index), path, index
+        )
+        source_sequence = item.get("source_sequence")
+        if (
+            isinstance(source_sequence, bool)
+            or not isinstance(source_sequence, int)
+            or source_sequence < 0
+        ):
+            raise ValueError(
+                f"message {index} source_sequence must be a non-negative integer in {path}"
+            )
+
+        session_id = _canonical_native_id("session", source, native_session_id)
+        position_key = (session_id, source_sequence)
+        if position_key in positions:
+            raise ValueError(
+                f"duplicate source_sequence {source_sequence} in native session "
+                f"{native_session_id!r} in {path}"
+            )
+        positions.add(position_key)
+
+        source_uuid = _canonical_native_id("message", source, native_message_id)
+        native_parent_message_id = _optional_string(item, "native_parent_message_id")
+        parent_uuid = (
+            _canonical_native_id("message", source, native_parent_message_id)
+            if native_parent_message_id
+            else ""
+        )
+        identity = (role, text, occurred_at, parent_uuid)
+        previous = identities.get(source_uuid)
+        if previous is not None and previous != identity:
+            raise ValueError(
+                f"immutable native_message_id {native_message_id!r} has conflicting content in {path}"
+            )
+        identities[source_uuid] = identity
+
+        native_parent_session_id = _optional_string(
+            item, "native_parent_session_id"
+        )
+        parent_session_id = (
+            _canonical_native_id("session", source, native_parent_session_id)
+            if native_parent_session_id
+            else ""
+        )
+        candidates.append(
+            {
+                "role": role,
+                "text": text,
+                "timestamp": occurred_at,
+                "session_id": session_id,
+                "source_file": str(path),
+                "source": source,
+                "source_uuid": source_uuid,
+                "parent_uuid": parent_uuid,
+                "line_no": source_sequence,
+                "provider": _optional_string(item, "provider"),
+                "model": _optional_string(item, "model"),
+                "native_message_id": native_message_id,
+                "native_parent_message_id": native_parent_message_id,
+                "native_session_id": native_session_id,
+                "native_parent_session_id": native_parent_session_id,
+                "parent_session_id": parent_session_id,
+                "source_route": source_route,
+                "room": room,
+                "sort_key": (source_sequence, native_message_id),
+            }
+        )
+    return assign_rounds(candidates)
+
+
+def _required_string(
+    item: dict[str, Any], key: str, path: Path, *, index: int | None = None
+) -> str:
+    value = item.get(key)
+    if not isinstance(value, str) or not value.strip():
+        where = f"message {index} " if index is not None else ""
+        raise ValueError(f"{where}{key} must be a non-empty string in {path}")
+    return value.strip()
+
+
+def _optional_string(item: dict[str, Any], key: str) -> str:
+    value = item.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _utc_timestamp(value: str, path: Path, index: int) -> str:
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(
+            f"message {index} occurred_at must be ISO 8601 UTC in {path}"
+        ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() != dt.timedelta(0):
+        raise ValueError(
+            f"message {index} occurred_at must include a UTC offset in {path}"
+        )
+    return value
+
+
 def load_test_transcript(path: Path) -> list[Message]:
     text = path.read_text(encoding="utf-8")
     matches = list(re.finditer(r"(?m)^(\d{2})[-—]?([LC])\s*$", text))
@@ -384,6 +528,11 @@ def _normalized_native_id(source: str, session_id: str, native_id: str) -> str:
         f"{source}|{session_id}|{native_id}".encode("utf-8")
     ).hexdigest()
     return f"normalized-native:{digest[:32]}"
+
+
+def _canonical_native_id(kind: str, source: str, native_id: str) -> str:
+    digest = hashlib.sha256(f"{source}|{native_id}".encode("utf-8")).hexdigest()
+    return f"{kind}:{digest[:32]}"
 
 
 # ── 共享文本/内容处理 ───────────────────────────────────────────────────────
@@ -507,4 +656,12 @@ def message_to_dict(message: Message) -> dict[str, Any]:
         "has_image": message.has_image,
         "image_count": message.image_count,
         "model": message.model,
+        "provider": message.provider,
+        "native_message_id": message.native_message_id,
+        "native_parent_message_id": message.native_parent_message_id,
+        "native_session_id": message.native_session_id,
+        "native_parent_session_id": message.native_parent_session_id,
+        "parent_session_id": message.parent_session_id,
+        "source_route": message.source_route,
+        "room": message.room,
     }

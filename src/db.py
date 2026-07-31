@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from config import DEFAULT_ROOM, MEMORY, ROOM_SLUGS, load_settings, room_for_source_file
+from config import DEFAULT_ROOM, MEMORY, ROOMS, ROOM_SLUGS, load_settings, room_for_source_file
 from memory_types import Message
 
 VENDOR = Path(__file__).resolve().parents[1] / "vendor"
@@ -20,7 +20,7 @@ import jieba  # type: ignore
 if hasattr(jieba, "setLogLevel"):  # 工作台的 jieba 兜底 mock 没有这方法
     jieba.setLogLevel(60)  # 静音 "Building prefix dict..."——检索是 agent 在用，噪音会混进每次输出
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 DB = MEMORY / "data" / "fragments.db"
 SCHEMA = MEMORY / "config" / "schema.sql"
@@ -94,11 +94,17 @@ def ingest_turns(conn: sqlite3.Connection, messages: list[Message]) -> list[str]
         if not message.source_uuid:
             continue  # 没有去重键的消息不入库（理论上不会发生）
         source = getattr(message, "source", "opus-legacy") or "opus-legacy"
+        native_message_id = getattr(message, "native_message_id", "") or ""
+        if native_message_id:
+            _upsert_source_session(conn, message, source)
+            _assert_immutable_native_message(conn, message, source)
         conn.execute(
             """
             INSERT INTO messages
-            (source_uuid, role, speaker, text, timestamp, parent_uuid, source, model, has_image, image_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (source_uuid, role, speaker, text, timestamp, parent_uuid, source,
+             provider, model, native_message_id, native_parent_message_id,
+             has_image, image_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_uuid) DO NOTHING
             """,
             (
@@ -109,7 +115,10 @@ def ingest_turns(conn: sqlite3.Connection, messages: list[Message]) -> list[str]
                 message.timestamp,
                 message.parent_uuid,
                 source,
+                message.provider or None,
                 message.model or None,
+                native_message_id or None,
+                message.native_parent_message_id or None,
                 message.has_image,
                 message.image_count,
             ),
@@ -139,6 +148,71 @@ def ingest_turns(conn: sqlite3.Connection, messages: list[Message]) -> list[str]
     refresh_session_forks(conn)
     conn.commit()
     return sorted(session_ids)
+
+
+def _upsert_source_session(
+    conn: sqlite3.Connection, message: Message, source: str
+) -> None:
+    if not message.native_session_id or not message.source_route or not message.room:
+        raise ValueError(
+            "canonical adapter messages require native_session_id, source_route, and resolved room"
+        )
+    conn.execute(
+        """
+        INSERT INTO source_sessions
+        (session_id, source, native_session_id, native_parent_session_id,
+         parent_session_id, source_route, room)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(session_id) DO UPDATE SET
+          native_parent_session_id = excluded.native_parent_session_id,
+          parent_session_id = excluded.parent_session_id,
+          source_route = excluded.source_route,
+          room = excluded.room,
+          updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            message.session_id,
+            source,
+            message.native_session_id,
+            message.native_parent_session_id or None,
+            message.parent_session_id or None,
+            message.source_route,
+            message.room,
+        ),
+    )
+
+
+def _assert_immutable_native_message(
+    conn: sqlite3.Connection, message: Message, source: str
+) -> None:
+    existing = conn.execute(
+        """
+        SELECT role, text, timestamp, parent_uuid, source,
+               native_message_id, native_parent_message_id
+        FROM messages WHERE source_uuid = ?
+        """,
+        (message.source_uuid,),
+    ).fetchone()
+    if existing is None:
+        return
+    expected = {
+        "role": message.role,
+        "text": message.text,
+        "timestamp": message.timestamp or None,
+        "parent_uuid": message.parent_uuid,
+        "source": source,
+        "native_message_id": message.native_message_id,
+        "native_parent_message_id": message.native_parent_message_id or None,
+    }
+    conflicts = [
+        key for key, value in expected.items()
+        if existing[key] != value
+    ]
+    if conflicts:
+        raise ValueError(
+            f"immutable native message conflict for {message.native_message_id!r}: "
+            + ", ".join(conflicts)
+        )
 
 
 def refresh_session_forks(conn: sqlite3.Connection, *, min_shared_turns: int | None = None) -> int:
@@ -274,6 +348,9 @@ def reconcile_deleted_files(conn: sqlite3.Connection, project_dirs: tuple[Path, 
     conn.execute(
         "DELETE FROM messages WHERE source_uuid NOT IN (SELECT source_uuid FROM turns)"
     )
+    conn.execute(
+        "DELETE FROM source_sessions WHERE session_id NOT IN (SELECT session_id FROM turns)"
+    )
     conn.commit()
     return removed
 
@@ -283,11 +360,17 @@ def get_session_ids(conn: sqlite3.Connection) -> list[str]:
 
 
 def room_for_session(conn: sqlite3.Connection, session_id: str) -> str | None:
-    """从 session 的 turns 落在哪个房间 project_dir 推断房间。
+    """先读 adapter 的显式本机 policy 结果，再从 legacy source_file 推断房间。
 
     一个 session 的 turns 可能散落在同一房间的多个文件（fork/撤回会拆分），但都在同一
     房间下，所以按 turn 数取多数的房间即可。全落在房间外（导出等）时返回 None。
     """
+    routed = conn.execute(
+        "SELECT room FROM source_sessions WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    if routed and routed["room"] in ROOMS:
+        return routed["room"]
     rows = conn.execute(
         "SELECT source_file, COUNT(*) AS n FROM turns WHERE session_id = ? GROUP BY source_file",
         (session_id,),

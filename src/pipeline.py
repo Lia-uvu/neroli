@@ -78,7 +78,8 @@ def finalize_card_updates(conn: sqlite3.Connection, viewer: str | None = None) -
 def reroom_cards(conn: sqlite3.Connection) -> dict:
     """把每张卡的 room 校正为其 session 来源派生出的房间。
 
-    来源（source_file 所在的房间 project_dir）是房间的权威来源。历史上新 session 首次
+    v2 adapter 以 source_sessions.room（本机 policy 结果）为权威；legacy 来源再按
+    source_file 所在的房间 project_dir 推断。历史上新 session 首次
     出卡曾一律回退默认房间，导致其他房间内容被误标；这里按 session 重新派生并批量改正。
     来源落在房间外（导出等）无法派生的卡保持不动。返回改动统计。
     """
@@ -256,7 +257,8 @@ def sessions_needing_update(conn: sqlite3.Connection) -> list[tuple[str, str]]:
     """, (min_first_session_turns, *exempt_globs)).fetchall()
     results = []
     for r in rows:
-        # 消息来源（source_file 落在哪个房间 project_dir）是房间的权威来源，能派生就用它——
+        # v2 adapter 的本机 policy 结果优先；legacy 才从 source_file/project_dir 派生。
+        # 能派生就用它——
         # 这样早期误判成默认房间的其他房间 session 会在下次出卡时自愈。只有来源落在房间外
         # （历史导出等）无法派生时，才回退已有卡的房间标签，再不行才用默认房间。
         room = room_for_session(conn, r["session_id"]) or (

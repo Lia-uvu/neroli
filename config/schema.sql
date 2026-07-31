@@ -1,3 +1,4 @@
+-- schema v11（2026-07-31，canonical adapter identity + explicit local room routing policy）
 -- schema v10（2026-07-31，turns 来源无关变更水位，供白天 Card Gen watcher 轮询）
 -- schema v9（2026-07-17，事件卡字段 theme 更名为 headline，含 cards_fts）
 -- schema v8（2026-07-11，卡片取用日志 card_access：read-heat，重量用「被重新拿起」度量）
@@ -10,8 +11,8 @@
 -- 数据结构依据：lab 的 design.html（四层存储）+ 早期「搜索建模 & 数据结构」备忘。
 --
 -- 核心概念：
---   source/room = source 是模型/消息来源短标签（user/agent/model-alias 等）；
---                 room 是空间归属（cards.room: rooms.json 里的房间名）
+--   source/room = v2 source 是 adapter namespace，旧来源仍是 user/model-alias 历史标签；
+--                 room 是本机 policy 决定的空间归属（cards.room: rooms.json 房间名）
 --   卡内分层   = 一张事件卡同时含 share（全院可见）与 private（仅 room 可见）两段。
 --                audience 不是行级属性，而是卡内字段。
 --   搜索/展示  = 搜索在 card 层（FTS/time），沿 Leiden community 下钻到卡片。
@@ -21,7 +22,7 @@
 -- 暂未含（待设计）：profile 画像注入层；embedding 向量索引。（constant 篮子已在 v7 落表）
 
 PRAGMA journal_mode = WAL;
-PRAGMA user_version = 10;
+PRAGMA user_version = 11;
 
 CREATE TABLE IF NOT EXISTS pipeline_runs (
   id TEXT PRIMARY KEY,
@@ -43,6 +44,24 @@ CREATE TABLE IF NOT EXISTS model_calls (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- adapter session provenance。adapter 只声明来源事实；room 是本机私有
+-- ingest.source_routes policy 的解析结果，不能由公开 export 直接指定。
+-- 旧 Claude Code / Claude.ai / legacy normalized session 继续由 source_file 派生房间，
+-- 因而不要求在此表中补造记录。
+CREATE TABLE IF NOT EXISTS source_sessions (
+  session_id               TEXT PRIMARY KEY,
+  source                   TEXT NOT NULL,
+  native_session_id        TEXT NOT NULL,
+  native_parent_session_id TEXT,
+  parent_session_id        TEXT,
+  source_route             TEXT NOT NULL,
+  room                     TEXT NOT NULL,
+  created_at               TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at               TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(source, native_session_id)
+);
+CREATE INDEX IF NOT EXISTS source_sessions_parent_idx ON source_sessions(parent_session_id);
+
 -- 原始层·正文：去重后的规范内容。一条消息一行，source_uuid 为全局去重键。
 -- 内容不可变：同一 uuid 多处出现（跨会话/跨文件/跨导出）只存一份，首次写入即定。
 CREATE TABLE IF NOT EXISTS messages (
@@ -53,11 +72,17 @@ CREATE TABLE IF NOT EXISTS messages (
   timestamp    TEXT,
   parent_uuid  TEXT,
   source       TEXT NOT NULL DEFAULT 'opus-legacy',
+  provider     TEXT,
   model        TEXT,
+  native_message_id        TEXT,
+  native_parent_message_id TEXT,
   has_image    INTEGER NOT NULL DEFAULT 0,
   image_count  INTEGER NOT NULL DEFAULT 0,
   created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE UNIQUE INDEX IF NOT EXISTS messages_source_native_idx
+  ON messages(source, native_message_id)
+  WHERE native_message_id IS NOT NULL;
 
 -- 原始层·发生：每个会话内的一次出现 + 排序。同一 uuid 在 N 个会话 = N 行 turns，1 行 messages。
 -- created_at 是 INGEST 时间（非对话时间）；recency 一律用 messages.timestamp。
