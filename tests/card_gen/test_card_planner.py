@@ -107,6 +107,101 @@ class CardPlannerCharacterizationTest(unittest.TestCase):
             ],
         )
 
+    def test_fork_child_refeeds_parent_tail_without_replacing_parent_cards(self) -> None:
+        parent_id = "parent00-session"
+        child_id = "child000-session"
+        db.ingest_turns(self.conn, _messages(parent_id, 1, 10))
+        db.ingest_turns(self.conn, _messages(child_id, 1, 15))
+        self.conn.execute(
+            """
+            INSERT INTO session_forks
+            (child_session_id, parent_session_id, fork_round, parent_fork_round,
+             delta_start_round, shared_turns, child_turns, parent_turns,
+             child_shared_ratio)
+            VALUES (?, ?, 10, 10, 11, 10, 15, 10, ?)
+            """,
+            (child_id, parent_id, 10 / 15),
+        )
+        for index, (lo, hi, label) in enumerate(
+            [(7, 8, "parent-7-8"), (8, 10, "parent-8-10")], start=1
+        ):
+            db.insert_card(
+                self.conn,
+                {
+                    "card_id": f"parent00#{index}",
+                    "session_id": parent_id,
+                    "turns": [lo, hi],
+                    "headline": label,
+                    "share": f"{label} share",
+                    "private": "",
+                    "tags": [label],
+                    "room": "main",
+                    "model": "old:model",
+                    "raw": f"{label} raw",
+                },
+                label="test",
+            )
+        self.conn.commit()
+
+        replacement = {
+            "turns": [8, 15],
+            "headline": "child tail",
+            "share": "child share",
+            "private": "",
+            "tags": ["child"],
+            "raw": "child raw",
+        }
+        model = StubModel()
+        run_id = db.create_pipeline_run(self.conn, model.name, None, [])
+
+        with patch("gen_cards.generate", return_value=[replacement]) as generate:
+            update_session_cards(self.conn, run_id, child_id, model, room="main")
+
+        context_messages = generate.call_args.args[0]
+        self.assertEqual(
+            sorted({message.round for message in context_messages}),
+            list(range(8, 16)),
+        )
+        self.assertEqual(
+            generate.call_args.kwargs["prior_summary"], "parent-7-8 share"
+        )
+
+        parent_cards = [
+            tuple(row)
+            for row in self.conn.execute(
+                """
+                SELECT card_id, headline, turn_start, turn_end
+                FROM cards
+                WHERE session_id = ?
+                ORDER BY card_id
+                """,
+                (parent_id,),
+            ).fetchall()
+        ]
+        self.assertEqual(
+            parent_cards,
+            [
+                ("parent00#1", "parent-7-8", 7, 8),
+                ("parent00#2", "parent-8-10", 8, 10),
+            ],
+        )
+        child_cards = [
+            tuple(row)
+            for row in self.conn.execute(
+                """
+                SELECT card_id, headline, turn_start, turn_end
+                FROM cards
+                WHERE session_id = ?
+                ORDER BY card_id
+                """,
+                (child_id,),
+            ).fetchall()
+        ]
+        self.assertEqual(
+            child_cards,
+            [("child000#1", "child tail", 8, 15)],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

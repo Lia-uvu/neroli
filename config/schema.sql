@@ -141,7 +141,8 @@ BEGIN
 END;
 
 -- 原始层·会话分叉：Claude 撤回/重发或手动 fork 时，新 session 会复制旧 transcript，
--- 共享 source_uuid。child 出卡时只处理 delta_start_round 之后的新增分支内容。
+-- 共享 source_uuid。delta_start_round 标记 fork 后第一轮新增内容，供首次 eligibility 与
+-- 无可复用 parent tail 时的 context fallback 使用；实际 Card Gen 重喂起点可因尾卡重叠而更早。
 CREATE TABLE IF NOT EXISTS session_forks (
   child_session_id   TEXT PRIMARY KEY,
   parent_session_id  TEXT NOT NULL,

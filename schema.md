@@ -237,7 +237,7 @@ jieba。Last24 热层只展示 `headline`。
 
 ## session_forks（会话 fork 关系，v6）
 
-Claude Code 撤回/重发或手动 fork 时会新建 session JSONL，但把旧 transcript 原样复制进去（复制行保留原 `source_uuid`）。此表记录推断出的 child→parent 关系和 fork 点，让出卡只处理 delta 部分。由 `refresh_session_forks`（db.py）重建。
+Claude Code 撤回/重发或手动 fork 时会新建 session JSONL，但把旧 transcript 原样复制进去（复制行保留原 `source_uuid`）。此表记录推断出的 child→parent 关系和 fork 点，让首次 eligibility 按 delta 部分计算，同时允许 Card Gen 把 parent tail 作为重叠 context。由 `refresh_session_forks`（db.py）重建。
 
 | 字段 | 说明 |
 |------|------|
@@ -245,7 +245,7 @@ Claude Code 撤回/重发或手动 fork 时会新建 session JSONL，但把旧 t
 | parent_session_id | 被复制的父会话 |
 | fork_round | 子会话里的分叉轮次 |
 | parent_fork_round | 父会话里对应的分叉轮次 |
-| delta_start_round | 子会话从哪一轮起是新内容（出卡只处理这之后） |
+| delta_start_round | fork 后第一轮新增内容；用于首次 eligibility 与无可复用 parent tail 时的 context fallback，不保证等于实际 Card Gen 重喂起点 |
 | shared_turns | 与父会话共享的 turn 数 |
 | child_turns / parent_turns | 子 / 父会话各自的 turn 数 |
 | child_shared_ratio | 共享占子会话的比例（推断置信度） |
