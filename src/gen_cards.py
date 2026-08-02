@@ -12,7 +12,8 @@ from __future__ import annotations
 import functools
 import re
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
 from config import DEFAULT_ROOM, MEMORY, agent_name, fill_username, load_settings, user_name
 from db import delete_card, get_session_cards, get_session_fork, insert_card, load_turns_from_round, record_model_call
@@ -27,6 +28,16 @@ CARD_RE = re.compile(r"turns?\s*[:：]\s*R?([0-9]+)\s*[-–]?\s*R?([0-9]*)", re.
 ModelCallObserver = Callable[
     [str, str, list[dict], Exception | None, list[dict[str, object]]], None
 ]
+
+
+@dataclass(frozen=True)
+class _TailRewritePlan:
+    """Current Card Planner boundary for a behavior-preserving tail rewrite."""
+
+    context_cards: tuple[sqlite3.Row, ...]
+    context_start_round: int
+    owned_tail_card_id: str | None
+    owned_prefix_count: int
 
 
 def _settings_card_gen() -> dict:
@@ -238,23 +249,21 @@ def _rewrite_session_tail(
         return []
 
     max_round = max(m.round for m in all_messages)
-    last_card = effective_cards[-1] if effective_cards else None
-    covered_round = _covered_round_for(session_id, last_card)
+    last_effective_card = effective_cards[-1] if effective_cards else None
+    covered_round = _covered_round_for(session_id, last_effective_card)
     if allow_noop and covered_round and covered_round >= max_round:
         return []
 
-    if len(effective_cards) >= 2:
-        frozen_rows = effective_cards[:-1]
-        refeed_from = frozen_rows[-1]["turn_end"] or 1
-    else:
-        frozen_rows = []
-        fork = get_session_fork(conn, session_id)
-        refeed_from = fork["delta_start_round"] if fork else 1
+    fork = get_session_fork(conn, session_id)
+    initial_context_round = fork["delta_start_round"] if fork else 1
+    plan = _plan_tail_rewrite(
+        session_id, effective_cards, initial_context_round=initial_context_round
+    )
 
-    frozen_dicts = _rows_to_card_dicts(conn, frozen_rows)
+    frozen_dicts = _rows_to_card_dicts(conn, plan.context_cards)
     prior_summary = _cards_to_summary(frozen_dicts) if frozen_dicts else ""
 
-    messages = load_turns_from_round(conn, session_id, refeed_from)
+    messages = load_turns_from_round(conn, session_id, plan.context_start_round)
     if not messages:
         return []
 
@@ -297,19 +306,18 @@ def _rewrite_session_tail(
         call_observer=audit_call,
     )
 
-    if last_card and last_card["session_id"] == session_id:
-        delete_card(conn, last_card["card_id"])
+    if plan.owned_tail_card_id is not None:
+        delete_card(conn, plan.owned_tail_card_id)
 
-    card_offset = sum(1 for row in frozen_rows if row["session_id"] == session_id)
     for i, c in enumerate(new_cards):
         c["session_id"] = session_id
         c["timestamp"] = _timestamp_for_card(messages, c)
-        c["card_id"] = f"{session_id[:8]}#{card_offset + i + 1}"
+        c["card_id"] = f"{session_id[:8]}#{plan.owned_prefix_count + i + 1}"
         c["room"] = room
         c["model"] = model.name
         insert_card(conn, c, label="pipeline", source_file="")
 
-    rewrote_own_card = bool(last_card and last_card["session_id"] == session_id)
+    rewrote_own_card = plan.owned_tail_card_id is not None
     step = "gen_cards_update" if rewrote_own_card else "gen_cards"
     summary = f"rewrite: -1 +{len(new_cards)} cards" if rewrote_own_card else f"{len(new_cards)} cards"
     record_model_call(
@@ -318,6 +326,37 @@ def _rewrite_session_tail(
     )
     conn.commit()
     return new_cards
+
+
+def _plan_tail_rewrite(
+    session_id: str,
+    effective_cards: list[sqlite3.Row],
+    *,
+    initial_context_round: int,
+) -> _TailRewritePlan:
+    """Separate readable context from the child/session-owned replacement tail."""
+    if len(effective_cards) >= 2:
+        context_cards = tuple(effective_cards[:-1])
+        context_start_round = context_cards[-1]["turn_end"] or 1
+    else:
+        context_cards = ()
+        context_start_round = initial_context_round
+
+    effective_tail = effective_cards[-1] if effective_cards else None
+    owned_tail_card_id = (
+        effective_tail["card_id"]
+        if effective_tail is not None and effective_tail["session_id"] == session_id
+        else None
+    )
+    owned_prefix_count = sum(
+        1 for row in context_cards if row["session_id"] == session_id
+    )
+    return _TailRewritePlan(
+        context_cards=context_cards,
+        context_start_round=context_start_round,
+        owned_tail_card_id=owned_tail_card_id,
+        owned_prefix_count=owned_prefix_count,
+    )
 
 
 def _effective_existing_cards(
@@ -369,7 +408,7 @@ def _timestamp_for_card(messages: list[Message], card: dict) -> str | None:
     return next((m.timestamp for m in reversed(messages) if m.timestamp), None)
 
 
-def _rows_to_card_dicts(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[dict]:
+def _rows_to_card_dicts(conn: sqlite3.Connection, rows: Sequence[sqlite3.Row]) -> list[dict]:
     result = []
     for r in rows:
         raw_row = conn.execute(
