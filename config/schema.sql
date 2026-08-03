@@ -1,3 +1,4 @@
+-- schema v12（2026-08-03，source-neutral conversation tree + rendering observations）
 -- schema v11（2026-07-31，canonical adapter identity + explicit local room routing policy）
 -- schema v10（2026-07-31，turns 来源无关变更水位，供白天 Card Gen watcher 轮询）
 -- schema v9（2026-07-17，事件卡字段 theme 更名为 headline，含 cards_fts）
@@ -22,7 +23,7 @@
 -- 暂未含（待设计）：profile 画像注入层；embedding 向量索引。（constant 篮子已在 v7 落表）
 
 PRAGMA journal_mode = WAL;
-PRAGMA user_version = 11;
+PRAGMA user_version = 12;
 
 CREATE TABLE IF NOT EXISTS pipeline_runs (
   id TEXT PRIMARY KEY,
@@ -84,6 +85,74 @@ CREATE UNIQUE INDEX IF NOT EXISTS messages_source_native_idx
   ON messages(source, native_message_id)
   WHERE native_message_id IS NOT NULL;
 
+-- Conversation-tree contract: canonical source facts are immutable nodes plus
+-- one parent edge. Runtime cursor/head facts live in the separate observation
+-- table and never change node/branch status.
+CREATE TABLE IF NOT EXISTS conversation_nodes (
+  node_id               TEXT PRIMARY KEY,
+  source                TEXT NOT NULL,
+  room                  TEXT NOT NULL,
+  native_node_id        TEXT NOT NULL,
+  parent_node_id        TEXT REFERENCES conversation_nodes(node_id),
+  native_parent_node_id TEXT,
+  occurred_at           TEXT,
+  kind                  TEXT NOT NULL CHECK(kind IN ('message', 'tool', 'checkpoint', 'event')),
+  source_type           TEXT NOT NULL,
+  role                  TEXT CHECK(role IS NULL OR role IN ('user', 'assistant')),
+  text                  TEXT,
+  message_json          TEXT,
+  provider              TEXT,
+  model                 TEXT,
+  created_at            TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(source, room, native_node_id),
+  CHECK(
+    (kind = 'message' AND role IS NOT NULL AND text IS NOT NULL AND message_json IS NOT NULL)
+    OR
+    (kind != 'message' AND role IS NULL AND text IS NULL AND message_json IS NULL)
+  )
+);
+CREATE INDEX IF NOT EXISTS conversation_nodes_parent_idx ON conversation_nodes(parent_node_id);
+CREATE INDEX IF NOT EXISTS conversation_nodes_room_time_idx
+  ON conversation_nodes(room, occurred_at, node_id);
+
+CREATE TABLE IF NOT EXISTS conversation_observations (
+  observation_id    TEXT PRIMARY KEY,
+  source            TEXT NOT NULL,
+  room              TEXT NOT NULL,
+  native_context_id TEXT NOT NULL,
+  kind              TEXT NOT NULL,
+  observed_at       TEXT NOT NULL,
+  node_id           TEXT NOT NULL REFERENCES conversation_nodes(node_id),
+  native_node_id    TEXT NOT NULL,
+  payload_json      TEXT NOT NULL DEFAULT '{}',
+  created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS conversation_observations_context_idx
+  ON conversation_observations(source, room, native_context_id, kind, observed_at);
+CREATE INDEX IF NOT EXISTS conversation_observations_node_idx
+  ON conversation_observations(node_id);
+
+-- Card-only derived stream decomposition. It records coverage/ownership, not a
+-- canonical main/active/preferred branch.
+CREATE TABLE IF NOT EXISTS conversation_card_branches (
+  session_id        TEXT PRIMARY KEY,
+  source            TEXT NOT NULL,
+  room              TEXT NOT NULL,
+  anchor_node_id    TEXT NOT NULL UNIQUE REFERENCES conversation_nodes(node_id),
+  parent_session_id TEXT REFERENCES conversation_card_branches(session_id),
+  fork_node_id      TEXT REFERENCES conversation_nodes(node_id),
+  created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS conversation_card_branches_parent_idx
+  ON conversation_card_branches(parent_session_id);
+
+CREATE TABLE IF NOT EXISTS conversation_node_branches (
+  node_id    TEXT PRIMARY KEY REFERENCES conversation_nodes(node_id),
+  session_id TEXT NOT NULL REFERENCES conversation_card_branches(session_id)
+);
+CREATE INDEX IF NOT EXISTS conversation_node_branches_session_idx
+  ON conversation_node_branches(session_id);
+
 -- 原始层·发生：每个会话内的一次出现 + 排序。同一 uuid 在 N 个会话 = N 行 turns，1 行 messages。
 -- created_at 是 INGEST 时间（非对话时间）；recency 一律用 messages.timestamp。
 CREATE TABLE IF NOT EXISTS turns (
@@ -94,6 +163,7 @@ CREATE TABLE IF NOT EXISTS turns (
   message_seq  INTEGER NOT NULL,            -- 轮内位置（user=1，assistant=2..N）
   source_file  TEXT,
   line_no      INTEGER,
+  is_context   INTEGER NOT NULL DEFAULT 0,
   created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(session_id, source_uuid)
 );
@@ -126,6 +196,7 @@ WHEN OLD.session_id IS NOT NEW.session_id
   OR OLD.message_seq IS NOT NEW.message_seq
   OR OLD.source_file IS NOT NEW.source_file
   OR OLD.line_no IS NOT NEW.line_no
+  OR OLD.is_context IS NOT NEW.is_context
 BEGIN
   UPDATE change_watermarks
   SET revision = revision + 1, updated_at = CURRENT_TIMESTAMP
@@ -172,6 +243,16 @@ CREATE TABLE IF NOT EXISTS cards (
 );
 CREATE INDEX IF NOT EXISTS cards_session_idx ON cards(session_id);
 CREATE INDEX IF NOT EXISTS cards_time_idx    ON cards(timestamp);
+
+-- Exact tree-node ownership for Cards. Shared ancestor turns may be readable
+-- context in a branch session but a node is owned by at most one card.
+CREATE TABLE IF NOT EXISTS card_nodes (
+  card_id  TEXT NOT NULL REFERENCES cards(card_id) ON DELETE CASCADE,
+  node_id  TEXT NOT NULL UNIQUE REFERENCES conversation_nodes(node_id),
+  position INTEGER NOT NULL,
+  PRIMARY KEY(card_id, node_id)
+);
+CREATE INDEX IF NOT EXISTS card_nodes_card_idx ON card_nodes(card_id, position);
 
 -- 卡片标签：entity overlap + 二阶共现的源
 CREATE TABLE IF NOT EXISTS card_tags (

@@ -58,6 +58,35 @@ def room_for_source_route(source: str, source_route: str) -> str:
     return room
 
 
+def validate_source_room(source: str, room: str) -> str:
+    """Validate adapter-owned room origin against this instance's allowlist.
+
+    The tree contract carries the room directly. ``ingest.source_rooms`` is the
+    target policy; existing ``source_routes`` values remain a compatibility
+    allowlist during the v2-to-tree transition.
+    """
+    if room not in ROOMS:
+        raise ValueError(f"source={source!r} submitted unknown room {room!r}")
+    ingest = load_settings().get("ingest", {})
+    source_rooms = ingest.get("source_rooms", {})
+    configured = source_rooms.get(source) if isinstance(source_rooms, dict) else None
+    if isinstance(configured, list):
+        allowed = {item for item in configured if isinstance(item, str)}
+    elif isinstance(configured, str):
+        allowed = {configured}
+    else:
+        routes = ingest.get("source_routes", {})
+        source_map = routes.get(source) if isinstance(routes, dict) else None
+        allowed = {
+            value for value in source_map.values() if isinstance(value, str)
+        } if isinstance(source_map, dict) else set()
+    if room not in allowed:
+        raise ValueError(
+            f"no ingest.source_rooms authorization for source={source!r}, room={room!r}"
+        )
+    return room
+
+
 def load_settings() -> dict:
     return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
 

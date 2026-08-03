@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 import os
 import shlex
@@ -9,8 +10,17 @@ from pathlib import Path
 
 from config import MEMORY, PROJECT_DIRS, ROOMS, custom_cli_cmd, load_settings, model_provider
 from context import rebuild_context
-from db import DB, create_pipeline_run, get_session_ids, ingest_turns, connect, reconcile_deleted_files, refresh_session_forks
-from loaders import load_messages_for_ingest, message_to_dict
+from db import (
+    DB,
+    connect,
+    create_pipeline_run,
+    get_session_ids,
+    ingest_conversation_tree,
+    ingest_turns,
+    reconcile_deleted_files,
+    refresh_session_forks,
+)
+from loaders import load_sources_for_ingest, message_to_dict
 from model import build_model
 from pipeline import auto_generate_cards, finalize_card_updates, process_session, rebuild_index, reroom_cards
 
@@ -44,6 +54,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rebuild-forks", action="store_true", help="Only rebuild inferred session fork relationships.")
     parser.add_argument("--reroom-cards", action="store_true", help="Re-derive each card's room from its session source file and rebuild context.")
     parser.add_argument("--list-forks", action="store_true", help="List inferred session fork relationships.")
+    parser.add_argument("--render-history", action="store_true", help="Print source-neutral conversation trees and latest render observations as JSON.")
+    parser.add_argument("--history-room", default=None, help=f"Room for --render-history ({'/'.join(ROOMS)}).")
+    parser.add_argument("--history-source", default=None, help="Optional adapter source filter for --render-history.")
+    parser.add_argument("--history-context", default=None, help="Optional native context/session filter for --render-history.")
     parser.add_argument("--dump-json", type=Path, help="Normalize inputs to JSON, then exit.")
     parser.add_argument("--ingest-only", action="store_true", help="Write input turns to SQLite without running the model.")
     parser.add_argument("--process-existing", action="store_true", help="Run the model from turns already in SQLite without reading input files.")
@@ -83,16 +97,35 @@ def run(argv: list[str] | None = None) -> int:
     if args.dump_json:
         # 与 ingest 同一条加载路径（全量读 + 跨文件去重 + 统一编号），dump 才能和入库一致。
         # --max-messages 仅作 dump 时的查看便利，在聚合编号之后再截尾。
-        loaded = load_messages_for_ingest(inputs)
+        loaded_sources = load_sources_for_ingest(inputs)
+        loaded = list(loaded_sources.messages)
         if args.max_messages > 0:
             loaded = loaded[-args.max_messages:]
         messages = [message_to_dict(msg) for msg in loaded]
+        payload: object = messages
+        if loaded_sources.conversation_trees:
+            payload = {
+                "messages": messages,
+                "conversation_trees": [asdict(batch) for batch in loaded_sources.conversation_trees],
+            }
         args.dump_json.parent.mkdir(parents=True, exist_ok=True)
-        args.dump_json.write_text(json.dumps(messages, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        args.dump_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"wrote {args.dump_json}")
         return 0
 
     conn = connect(args.db)
+
+    if args.render_history:
+        if not args.history_room:
+            raise ValueError("--render-history requires --history-room")
+        from history import render_history
+        print(json.dumps(render_history(
+            conn,
+            room=args.history_room,
+            source=args.history_source,
+            native_context_id=args.history_context,
+        ), ensure_ascii=False, indent=2))
+        return 0
 
     if args.rebuild_context:
         rebuild_context(conn, viewer=args.context_room)
@@ -266,13 +299,22 @@ def run(argv: list[str] | None = None) -> int:
     if inputs:
         # ingest 必须读完整文件：round 编号跨文件一次性算，截断会让轮次漂移。
         # --max-messages 不影响 ingest（出卡步在 generate() 里自己开窗），只用于 --dump-json。
-        all_messages = load_messages_for_ingest(inputs)
-        new_session_ids = ingest_turns(conn, all_messages)
+        loaded = load_sources_for_ingest(inputs)
+        all_messages = list(loaded.messages)
+        new_session_ids = ingest_turns(conn, all_messages) if all_messages else []
+        for tree in loaded.conversation_trees:
+            new_session_ids.extend(ingest_conversation_tree(conn, tree))
+        new_session_ids = sorted(set(new_session_ids))
         if not session_ids:
             session_ids = new_session_ids
         else:
             session_ids = sorted(set(session_ids) & set(new_session_ids))
-        print(f"loaded {len(all_messages)} messages; sessions with new turns: {len(session_ids)}")
+        tree_nodes = sum(len(tree.nodes) for tree in loaded.conversation_trees)
+        observations = sum(len(tree.observations) for tree in loaded.conversation_trees)
+        print(
+            f"loaded {len(all_messages)} messages + {tree_nodes} tree nodes + "
+            f"{observations} observations; sessions with new turns: {len(session_ids)}"
+        )
     elif new_mtimes is not None:
         print("no changed files since last ingest")
 

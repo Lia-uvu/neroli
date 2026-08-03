@@ -32,6 +32,7 @@
     "min_interval_minutes": 60,
     "min_first_session_turns": 3,
     "min_first_session_turns_exempt_source_globs": [],
+    "min_first_session_turns_exempt_sources": [],
     "max_sessions_per_trigger": 10,
     "model": "gpt-5.5",
     "reasoning_effort": "low",
@@ -73,13 +74,16 @@
   },
 
   "ingest": {
-    "_comment": "source_routes is the private instance policy mapping adapter-owned source + source_route to a configured room; unknown v2 routes are rejected instead of falling back to the default room. fork_min_shared_turns: sessions sharing at least this many canonical source_uuid rows are treated as a fork. origin_data_dir (optional): Claude.ai export archive; leave empty if unused.",
+    "_comment": "source_rooms authorizes adapter-owned room origin for the conversation-tree contract. source_routes remains the private compatibility mapping for normalized v2. Unknown rooms/routes are rejected instead of falling back to the default room. fork_min_shared_turns applies to legacy inferred session forks only. origin_data_dir (optional): Claude.ai export archive; leave empty if unused.",
     "fork_min_shared_turns": 2,
     "origin_data_dir": "",
     "source_routes": {
       "example-adapter": {
         "example-route": "main"
       }
+    },
+    "source_rooms": {
+      "example-adapter": ["main"]
     }
   },
 

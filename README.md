@@ -59,8 +59,10 @@ The system is iterated on agent feedback, so the primary users of the memory are
 ## Documentation
 - [ARCHITECTURE.md](ARCHITECTURE.md) — module map, data flow, boundary rules
 - [skills/ops/SKILL.md](skills/ops/SKILL.md) — operations skill and index ("what do I edit to change X")
+- [docs/source-adapter-boundary.md](docs/source-adapter-boundary.md) — what source adapters own, what Neroli owns, and the current tree boundary
 - [docs/normalized-adapter-contract.md](docs/normalized-adapter-contract.md) — source adapter contract, canonical identity, ordering, and local room policy
-- [schema.md](schema.md) — SQLite schema v11 reference
+- [docs/conversation-tree-adapter-contract.md](docs/conversation-tree-adapter-contract.md) — incremental node/parent tree contract with rendering-only observations
+- [schema.md](schema.md) — SQLite schema v12 reference
 
 ## FAQ
 **Where does my data go?**

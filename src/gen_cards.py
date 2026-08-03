@@ -16,7 +16,17 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from config import DEFAULT_ROOM, MEMORY, agent_name, fill_username, load_settings, user_name
-from db import delete_card, get_session_cards, get_session_fork, insert_card, load_turns_from_round, record_model_call
+from db import (
+    attach_card_nodes,
+    delete_card,
+    get_session_cards,
+    get_session_fork,
+    insert_card,
+    is_tree_card_session,
+    load_turns_from_round,
+    record_model_call,
+    tree_session_has_uncovered_nodes,
+)
 from memory_types import Message
 from model import ModelRunner, model_attempts
 
@@ -251,8 +261,12 @@ def _rewrite_session_tail(
     max_round = max(m.round for m in all_messages)
     last_effective_card = effective_cards[-1] if effective_cards else None
     covered_round = _covered_round_for(session_id, last_effective_card)
-    if allow_noop and covered_round and covered_round >= max_round:
-        return []
+    if allow_noop:
+        if is_tree_card_session(conn, session_id):
+            if not tree_session_has_uncovered_nodes(conn, session_id):
+                return []
+        elif covered_round and covered_round >= max_round:
+            return []
 
     fork = get_session_fork(conn, session_id)
     initial_context_round = fork["delta_start_round"] if fork else 1
@@ -316,6 +330,13 @@ def _rewrite_session_tail(
         c["room"] = room
         c["model"] = model.name
         insert_card(conn, c, label="pipeline", source_file="")
+        attach_card_nodes(
+            conn,
+            c["card_id"],
+            session_id,
+            c.get("turns", [None, None])[0],
+            c.get("turns", [None, None])[1],
+        )
 
     rewrote_own_card = plan.owned_tail_card_id is not None
     step = "gen_cards_update" if rewrote_own_card else "gen_cards"

@@ -101,7 +101,7 @@ class TurnsWatermarkTest(unittest.TestCase):
         self.conn.commit()
         self.assertEqual(self.revision(), 1)
 
-    def test_v9_through_v11_migrations_preserve_turns_and_install_contract(self) -> None:
+    def test_v9_through_v12_migrations_preserve_turns_and_install_contract(self) -> None:
         db_path = Path(self.tmp.name) / "migration.db"
         conn = sqlite3.connect(db_path)
         conn.executescript(
@@ -194,6 +194,21 @@ class TurnsWatermarkTest(unittest.TestCase):
             ["provider", "native_message_id", "native_parent_message_id"],
         )
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM source_sessions").fetchone()[0], 0)
+
+        migration = (
+            ROOT / "migrations" / "012-conversation-tree.sql"
+        ).read_text(encoding="utf-8")
+        conn.executescript(migration)
+        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 12)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0], 2)
+        self.assertEqual(
+            [row[1] for row in conn.execute("PRAGMA table_info(turns)")][-1:],
+            ["is_context"],
+        )
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM conversation_nodes").fetchone()[0],
+            0,
+        )
         self.assertEqual(conn.execute("PRAGMA quick_check").fetchone()[0], "ok")
         self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
         conn.close()

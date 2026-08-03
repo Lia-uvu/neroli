@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import re
 import sqlite3
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from config import DEFAULT_ROOM, MEMORY, ROOMS, ROOM_SLUGS, load_settings, room_for_source_file
-from memory_types import Message
+from memory_types import ConversationNode, ConversationTreeBatch, Message
 
 VENDOR = Path(__file__).resolve().parents[1] / "vendor"
 if VENDOR.exists() and str(VENDOR) not in sys.path:
@@ -20,7 +21,7 @@ import jieba  # type: ignore
 if hasattr(jieba, "setLogLevel"):  # 工作台的 jieba 兜底 mock 没有这方法
     jieba.setLogLevel(60)  # 静音 "Building prefix dict..."——检索是 agent 在用，噪音会混进每次输出
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 DB = MEMORY / "data" / "fragments.db"
 SCHEMA = MEMORY / "config" / "schema.sql"
@@ -148,6 +149,354 @@ def ingest_turns(conn: sqlite3.Connection, messages: list[Message]) -> list[str]
     refresh_session_forks(conn)
     conn.commit()
     return sorted(session_ids)
+
+
+def ingest_conversation_tree(
+    conn: sqlite3.Connection, batch: ConversationTreeBatch
+) -> list[str]:
+    """Persist one additive tree batch and refresh its Card-only branch projection.
+
+    Cursor/head observations are inserted after the immutable nodes and never
+    create turns. Only portable message nodes participate in the Card projection.
+    """
+    ordered = _validate_and_order_tree_batch(conn, batch)
+    changed_branches: set[str] = set()
+    conn.execute("SAVEPOINT ingest_conversation_tree")
+    try:
+        for node in ordered:
+            _insert_or_assert_tree_node(conn, node)
+        for node in ordered:
+            branch_id, newly_assigned = _assign_tree_branch(conn, node)
+            if newly_assigned:
+                changed_branches.add(branch_id)
+            if node.kind == "message":
+                _insert_tree_message(conn, node)
+        for branch_id in sorted(changed_branches):
+            _rebuild_tree_branch_turns(conn, branch_id)
+        for observation in batch.observations:
+            node = conn.execute(
+                "SELECT source, room FROM conversation_nodes WHERE node_id = ?",
+                (observation.node_id,),
+            ).fetchone()
+            if node is None or node["source"] != batch.source or node["room"] != batch.room:
+                raise ValueError(
+                    f"observation {observation.observation_id!r} points outside "
+                    f"source={batch.source!r}, room={batch.room!r}"
+                )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO conversation_observations
+                (observation_id, source, room, native_context_id, kind,
+                 observed_at, node_id, native_node_id, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    observation.observation_id,
+                    observation.source,
+                    observation.room,
+                    observation.native_context_id,
+                    observation.kind,
+                    observation.observed_at,
+                    observation.node_id,
+                    observation.native_node_id,
+                    observation.payload_json,
+                ),
+            )
+        refresh_session_forks(conn)
+        conn.execute("RELEASE SAVEPOINT ingest_conversation_tree")
+        conn.commit()
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT ingest_conversation_tree")
+        conn.execute("RELEASE SAVEPOINT ingest_conversation_tree")
+        raise
+    return sorted(changed_branches)
+
+
+def _validate_and_order_tree_batch(
+    conn: sqlite3.Connection, batch: ConversationTreeBatch
+) -> list[ConversationNode]:
+    incoming = {node.node_id: node for node in batch.nodes}
+    if len(incoming) != len(batch.nodes):
+        raise ValueError("conversation tree batch contains duplicate canonical node IDs")
+    existing_rows = conn.execute(
+        """
+        SELECT node_id, parent_node_id, source, room
+        FROM conversation_nodes
+        WHERE source = ? AND room = ?
+        """,
+        (batch.source, batch.room),
+    ).fetchall()
+    parents = {row["node_id"]: row["parent_node_id"] for row in existing_rows}
+    for node in batch.nodes:
+        if node.source != batch.source or node.room != batch.room:
+            raise ValueError("tree node source/room must match its envelope")
+        if node.parent_node_id and node.parent_node_id not in incoming and node.parent_node_id not in parents:
+            outside = conn.execute(
+                "SELECT source, room FROM conversation_nodes WHERE node_id = ?",
+                (node.parent_node_id,),
+            ).fetchone()
+            if outside is not None:
+                raise ValueError(
+                    f"parent {node.native_parent_node_id!r} belongs to a different source/room"
+                )
+            raise ValueError(
+                f"missing parent {node.native_parent_node_id!r} for node {node.native_node_id!r}"
+            )
+        parents[node.node_id] = node.parent_node_id
+
+    state: dict[str, int] = {}
+    ordered: list[ConversationNode] = []
+
+    def visit(node_id: str) -> None:
+        status = state.get(node_id, 0)
+        if status == 2:
+            return
+        if status == 1:
+            raise ValueError(f"conversation tree contains a parent cycle at {node_id}")
+        state[node_id] = 1
+        parent_id = parents.get(node_id)
+        if parent_id in incoming:
+            visit(parent_id)
+        state[node_id] = 2
+        if node_id in incoming:
+            ordered.append(incoming[node_id])
+
+    for node in sorted(
+        batch.nodes,
+        key=lambda item: (item.occurred_at or "", item.node_id),
+    ):
+        visit(node.node_id)
+    return ordered
+
+
+def _insert_or_assert_tree_node(
+    conn: sqlite3.Connection, node: ConversationNode
+) -> None:
+    existing = conn.execute(
+        "SELECT * FROM conversation_nodes WHERE node_id = ?", (node.node_id,)
+    ).fetchone()
+    values = {
+        "source": node.source,
+        "room": node.room,
+        "native_node_id": node.native_node_id,
+        "parent_node_id": node.parent_node_id,
+        "native_parent_node_id": node.native_parent_node_id,
+        "occurred_at": node.occurred_at,
+        "kind": node.kind,
+        "source_type": node.source_type,
+        "role": node.role,
+        "text": node.text,
+        "message_json": node.message_json,
+        "provider": node.provider,
+        "model": node.model,
+    }
+    if existing is not None:
+        conflicts = [key for key, value in values.items() if existing[key] != value]
+        if conflicts:
+            raise ValueError(
+                f"immutable conversation node conflict for {node.native_node_id!r}: "
+                + ", ".join(conflicts)
+            )
+        return
+    conn.execute(
+        """
+        INSERT INTO conversation_nodes
+        (node_id, source, room, native_node_id, parent_node_id,
+         native_parent_node_id, occurred_at, kind, source_type, role, text,
+         message_json, provider, model)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            node.node_id, node.source, node.room, node.native_node_id,
+            node.parent_node_id, node.native_parent_node_id, node.occurred_at,
+            node.kind, node.source_type, node.role, node.text,
+            node.message_json, node.provider, node.model,
+        ),
+    )
+
+
+def _tree_branch_id(node_id: str) -> str:
+    return hashlib.sha256(f"card-branch|{node_id}".encode("utf-8")).hexdigest()[:32]
+
+
+def _assign_tree_branch(
+    conn: sqlite3.Connection, node: ConversationNode
+) -> tuple[str, bool]:
+    existing = conn.execute(
+        "SELECT session_id FROM conversation_node_branches WHERE node_id = ?",
+        (node.node_id,),
+    ).fetchone()
+    if existing is not None:
+        return existing["session_id"], False
+
+    parent_branch: str | None = None
+    if node.parent_node_id:
+        parent = conn.execute(
+            "SELECT session_id FROM conversation_node_branches WHERE node_id = ?",
+            (node.parent_node_id,),
+        ).fetchone()
+        if parent is None:
+            raise ValueError(
+                f"parent branch missing for conversation node {node.native_node_id!r}"
+            )
+        parent_branch = parent["session_id"]
+
+    branch_id = parent_branch
+    if parent_branch is not None:
+        inherited_child = conn.execute(
+            """
+            SELECT 1
+            FROM conversation_nodes child
+            JOIN conversation_node_branches owned ON owned.node_id = child.node_id
+            WHERE child.parent_node_id = ? AND owned.session_id = ?
+            LIMIT 1
+            """,
+            (node.parent_node_id, parent_branch),
+        ).fetchone()
+        if inherited_child is not None:
+            branch_id = None
+
+    if branch_id is None or parent_branch is None:
+        branch_id = _tree_branch_id(node.node_id)
+        conn.execute(
+            """
+            INSERT INTO conversation_card_branches
+            (session_id, source, room, anchor_node_id, parent_session_id, fork_node_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                branch_id, node.source, node.room, node.node_id,
+                parent_branch, node.parent_node_id if parent_branch else None,
+            ),
+        )
+    conn.execute(
+        "INSERT INTO conversation_node_branches (node_id, session_id) VALUES (?, ?)",
+        (node.node_id, branch_id),
+    )
+    return branch_id, True
+
+
+def _insert_tree_message(conn: sqlite3.Connection, node: ConversationNode) -> None:
+    existing = conn.execute(
+        """
+        SELECT role, text, timestamp, parent_uuid, source, provider, model
+        FROM messages WHERE source_uuid = ?
+        """,
+        (node.node_id,),
+    ).fetchone()
+    expected = (
+        node.role, node.text, node.occurred_at, node.parent_node_id,
+        node.source, node.provider, node.model,
+    )
+    if existing is not None:
+        actual = tuple(existing[key] for key in (
+            "role", "text", "timestamp", "parent_uuid", "source", "provider", "model"
+        ))
+        if actual != expected:
+            raise ValueError(f"immutable Card message projection conflict for {node.native_node_id!r}")
+        return
+    conn.execute(
+        """
+        INSERT INTO messages
+        (source_uuid, role, speaker, text, timestamp, parent_uuid, source,
+         provider, model, has_image, image_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+        """,
+        (
+            node.node_id,
+            node.role,
+            user_name_for_role(node.role),
+            node.text,
+            node.occurred_at,
+            node.parent_node_id,
+            node.source,
+            node.provider,
+            node.model,
+        ),
+    )
+
+
+def user_name_for_role(role: str | None) -> str:
+    from config import agent_name, user_name
+    return user_name() if role == "user" else agent_name()
+
+
+def _rebuild_tree_branch_turns(conn: sqlite3.Connection, session_id: str) -> None:
+    tips = conn.execute(
+        """
+        SELECT n.node_id
+        FROM conversation_nodes n
+        JOIN conversation_node_branches owned ON owned.node_id = n.node_id
+        WHERE owned.session_id = ?
+          AND NOT EXISTS (
+            SELECT 1
+            FROM conversation_nodes child
+            JOIN conversation_node_branches child_owned
+              ON child_owned.node_id = child.node_id
+            WHERE child.parent_node_id = n.node_id
+              AND child_owned.session_id = owned.session_id
+          )
+        """,
+        (session_id,),
+    ).fetchall()
+    if len(tips) != 1:
+        raise ValueError(
+            f"Card branch {session_id} must have one owned tip, found {len(tips)}"
+        )
+    path: list[sqlite3.Row] = []
+    node_id: str | None = tips[0]["node_id"]
+    seen: set[str] = set()
+    while node_id:
+        if node_id in seen:
+            raise ValueError(f"conversation tree cycle while projecting {session_id}")
+        seen.add(node_id)
+        row = conn.execute(
+            """
+            SELECT n.*, owned.session_id AS owner_session_id
+            FROM conversation_nodes n
+            JOIN conversation_node_branches owned ON owned.node_id = n.node_id
+            WHERE n.node_id = ?
+            """,
+            (node_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"missing conversation node {node_id} during Card projection")
+        path.append(row)
+        node_id = row["parent_node_id"]
+    path.reverse()
+
+    round_no = 0
+    message_seq = 0
+    line_no = 0
+    for node in path:
+        if node["kind"] != "message":
+            continue
+        line_no += 1
+        if node["role"] == "user" or round_no == 0:
+            round_no += 1
+            message_seq = 0
+        message_seq += 1
+        conn.execute(
+            """
+            INSERT INTO turns
+            (session_id, source_uuid, round, message_seq, source_file, line_no, is_context)
+            VALUES (?, ?, ?, ?, NULL, ?, ?)
+            ON CONFLICT(session_id, source_uuid) DO UPDATE SET
+              round = excluded.round,
+              message_seq = excluded.message_seq,
+              source_file = excluded.source_file,
+              line_no = excluded.line_no,
+              is_context = excluded.is_context
+            """,
+            (
+                session_id,
+                node["node_id"],
+                round_no,
+                message_seq,
+                line_no,
+                0 if node["owner_session_id"] == session_id else 1,
+            ),
+        )
 
 
 def _upsert_source_session(
@@ -293,6 +642,55 @@ def refresh_session_forks(conn: sqlite3.Connection, *, min_shared_turns: int | N
         ):
             best[child] = candidate
 
+    # Tree adapters already provide the parent edge. Their Card sessions are a
+    # derived stream decomposition, so preserve that explicit relationship even
+    # when a branch has fewer shared turns than the legacy overlap threshold.
+    tree_branches = conn.execute(
+        """
+        SELECT session_id, parent_session_id
+        FROM conversation_card_branches
+        WHERE parent_session_id IS NOT NULL
+        """
+    ).fetchall()
+    for branch in tree_branches:
+        child = branch["session_id"]
+        parent = branch["parent_session_id"]
+        child_stats = stats.get(child)
+        parent_stats = stats.get(parent)
+        if not child_stats or not parent_stats:
+            continue
+        shared = conn.execute(
+            """
+            SELECT COUNT(*) AS shared_turns,
+                   MAX(ct.round) AS child_fork_round,
+                   MAX(pt.round) AS parent_fork_round
+            FROM turns ct
+            JOIN turns pt ON pt.source_uuid = ct.source_uuid
+                         AND pt.session_id = ?
+            WHERE ct.session_id = ? AND ct.is_context = 1
+            """,
+            (parent, child),
+        ).fetchone()
+        delta = conn.execute(
+            """
+            SELECT MIN(round) AS delta_start_round
+            FROM turns WHERE session_id = ? AND is_context = 0
+            """,
+            (child,),
+        ).fetchone()
+        shared_turns = int(shared["shared_turns"] or 0)
+        best[child] = {
+            "child_session_id": child,
+            "parent_session_id": parent,
+            "fork_round": int(shared["child_fork_round"] or 0),
+            "parent_fork_round": int(shared["parent_fork_round"] or 0),
+            "delta_start_round": int(delta["delta_start_round"] or 1),
+            "shared_turns": shared_turns,
+            "child_turns": child_stats["turn_count"],
+            "parent_turns": parent_stats["turn_count"],
+            "child_shared_ratio": shared_turns / max(child_stats["turn_count"], 1),
+        }
+
     conn.execute("DELETE FROM session_forks")
     for item in best.values():
         conn.execute(
@@ -365,6 +763,12 @@ def room_for_session(conn: sqlite3.Connection, session_id: str) -> str | None:
     一个 session 的 turns 可能散落在同一房间的多个文件（fork/撤回会拆分），但都在同一
     房间下，所以按 turn 数取多数的房间即可。全落在房间外（导出等）时返回 None。
     """
+    tree_room = conn.execute(
+        "SELECT room FROM conversation_card_branches WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    if tree_room and tree_room["room"] in ROOMS:
+        return tree_room["room"]
     routed = conn.execute(
         "SELECT room FROM source_sessions WHERE session_id = ?",
         (session_id,),
@@ -383,6 +787,57 @@ def room_for_session(conn: sqlite3.Connection, session_id: str) -> str | None:
     if not tally:
         return None
     return max(tally, key=tally.get)
+
+
+def is_tree_card_session(conn: sqlite3.Connection, session_id: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM conversation_card_branches WHERE session_id = ?",
+        (session_id,),
+    ).fetchone() is not None
+
+
+def tree_session_has_uncovered_nodes(
+    conn: sqlite3.Connection, session_id: str
+) -> bool:
+    return conn.execute(
+        """
+        SELECT 1
+        FROM turns t
+        JOIN conversation_nodes n ON n.node_id = t.source_uuid
+        LEFT JOIN card_nodes covered ON covered.node_id = n.node_id
+        WHERE t.session_id = ? AND t.is_context = 0 AND covered.node_id IS NULL
+        LIMIT 1
+        """,
+        (session_id,),
+    ).fetchone() is not None
+
+
+def attach_card_nodes(
+    conn: sqlite3.Connection, card_id: str, session_id: str,
+    start_round: int | None, end_round: int | None,
+) -> None:
+    """Attach only branch-owned tree nodes; readable ancestor context stays unowned."""
+    if start_round is None:
+        return
+    hi = end_round if end_round is not None else start_round
+    rows = conn.execute(
+        """
+        SELECT t.source_uuid AS node_id
+        FROM turns t
+        JOIN conversation_nodes n ON n.node_id = t.source_uuid
+        LEFT JOIN card_nodes covered ON covered.node_id = n.node_id
+        WHERE t.session_id = ? AND t.is_context = 0
+          AND t.round BETWEEN ? AND ?
+          AND covered.node_id IS NULL
+        ORDER BY t.round, t.message_seq, t.line_no
+        """,
+        (session_id, start_round, hi),
+    ).fetchall()
+    for position, row in enumerate(rows, start=1):
+        conn.execute(
+            "INSERT INTO card_nodes (card_id, node_id, position) VALUES (?, ?, ?)",
+            (card_id, row["node_id"], position),
+        )
 
 
 def _distinct_in(conn: sqlite3.Connection, select_col: str, where_col: str, values) -> set[str]:

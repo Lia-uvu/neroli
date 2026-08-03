@@ -1,8 +1,8 @@
-# recall-pipeline 表结构（schema v11）
+# recall-pipeline 表结构（schema v12）
 
 > 改 db.py 或 schema.sql 时查这个。
 >
-> **版本机制**：`PRAGMA user_version = 11`。connect() 只校验版本不做迁移；
+> **版本机制**：`PRAGMA user_version = 12`。connect() 只校验版本不做迁移；
 > 升级写 `migrations/NNN-*.sql`（手动 `sqlite3 db < 迁移文件`），并同步 schema.sql 和本文档。
 
 ## 原始层（v4：内容与发生分离）
@@ -23,6 +23,7 @@ v3 的单表 `turns` 有数据完整性 bug：`UNIQUE(session_id, round, role)` 
 | Claude Code JSONL | `~/.claude/projects/<room>/*.jsonl` | 顶层 `uuid` | 顶层 `sessionId` | 文件追加序（多文件→最早ts再 line_no） | **live**，watcher 实时 tail 已配置的 room |
 | Claude.ai 导出 | `backups/origin-data/**/conversations.json` | `chat_messages[].uuid`（原生） | 会话 `uuid` | 消息 `created_at` + 数组下标 | **archive**，一次性手动 backfill，不 watch |
 | normalized adapter v2 | `*.json` envelope | `sha256(source + native_message_id)` | `sha256(source + native_session_id)` | 按 `source_sequence` 排序，再由 Neroli 推导 round | adapter snapshot / live spool |
+| conversation tree v1 | `*.json` envelope | `conversation_nodes.node_id` 的 message 投影 | Card-only branch session | 每条树路径临时推导；不是 source fact | incremental node batch |
 | legacy normalized / test | `*.json` array / `*.txt` | 旧 source+session+native id 或 path/content 哈希 | 显式 / `path.stem` | adapter 显式 round | compatibility / dev |
 
 加载分两阶段：candidate 加载器抽字段带 sort_key（不定 round）→ `assign_rounds` 对全量先按
@@ -30,6 +31,11 @@ v3 的单表 `turns` 有数据完整性 bug：`UNIQUE(session_id, round, role)` 
 ingest 必须读完整文件（round 跨文件一次算），`--max-messages` 仅供 `--dump-json` 查看。
 v2 完整字段、ID 公式、不可变与路由规则见
 [`docs/normalized-adapter-contract.md`](docs/normalized-adapter-contract.md)。
+adapter / Neroli 职责分界、当前 tree 表达能力和未实现的 deletion 语义见
+[`docs/source-adapter-boundary.md`](docs/source-adapter-boundary.md)。
+基于 Pi / Claude Code 原生节点、parent edge 与可选 observation 的 contract
+见 [`docs/conversation-tree-adapter-contract.md`](docs/conversation-tree-adapter-contract.md)；
+schema v12 已实现。
 
 ## source_sessions（adapter session provenance，v11）
 
@@ -43,6 +49,42 @@ v2 完整字段、ID 公式、不可变与路由规则见
 | source_route | adapter 的稳定入口标签，不是 room |
 | room | 本机私有 `ingest.source_routes` policy 的解析结果 |
 | created_at / updated_at | 首次与最近一次接收时间 |
+
+## conversation_nodes（来源中立原文树，v12）
+
+Tree-aware adapter 的 canonical 正本。节点以 `(source, room, native_node_id)` 命名，
+一个节点最多一个 parent；同 ID 的内容、parent 和 provenance 不可变。
+
+| 字段 | 说明 |
+|------|------|
+| node_id | Neroli canonical ID，PK |
+| source / room / native_node_id | adapter namespace、明确房间来源与原生节点 ID；组合唯一 |
+| parent_node_id / native_parent_node_id | canonical / 原生 parent；根为 NULL |
+| occurred_at | 来源发生时间，可空 |
+| kind / source_type | portable 类型（message/tool/checkpoint/event）与来源类型 |
+| role / text / message_json | 只在 portable user/assistant message 上存在 |
+| provider / model | 来源可权威提供时保留 |
+
+## conversation_observations（渲染旁注，v12）
+
+可选、只追加的 source observation。当前 `cursor` 记录“在某 runtime context 与
+observed_at，指针在哪个节点”。History 投影可沿 parent 还原当时路径；Card Gen
+不读此表，写此表也不推进 `turns` 水位。
+
+| 字段 | 说明 |
+|------|------|
+| observation_id | 完整规范事实的确定性哈希，PK |
+| source / room / native_context_id | 来源、房间和 runtime/session context |
+| kind / observed_at | 开放 observation 类型与 UTC 观测时间 |
+| node_id / native_node_id | 指向同一 forest 内的节点 |
+| payload_json | adapter 可选 JSON 旁注；Neroli 不解释未知语义 |
+
+## conversation_card_branches / conversation_node_branches（Card 派生处理状态，v12）
+
+把原文树确定性投影成现有 rolling Card Planner 可读的 session 流。第一个被发现
+的 child 延续已有处理流，后续 sibling 建 peer 流；共享 ancestor 在 peer 的 `turns`
+里标 `is_context=1`。这是可重建的 coverage/ownership 状态，不是 canonical main/active
+branch 属性。
 
 ## messages（去重后的规范内容）
 
@@ -72,6 +114,7 @@ v2 完整字段、ID 公式、不可变与路由规则见
 | message_seq | 轮内位置（user=1，assistant=2..N） |
 | source_file | 来源文件路径 |
 | line_no | 文件追加序 / 会话内数组下标 |
+| is_context | tree Card 投影中 1=共享 ancestor 只读语境，0=本 branch 新物料；legacy 默认 0 |
 | created_at | **INGEST 时间**（非对话时间）；recency 一律用 messages.timestamp |
 
 `UNIQUE(session_id, source_uuid)` — 同一 uuid 在一个会话只一行；全量重读用 DO UPDATE 自纠 round/seq。
@@ -102,6 +145,13 @@ Card Gen 唤醒入口。
 | timestamp | 原始对话发生时间 |
 | room | room 名，如 main / secondary |
 | model | 生成用的模型 |
+
+## card_nodes（tree Card 精确 ownership，v12）
+
+`card_id -> node_id` 映射只记录该 Card 真正拥有的 tree message nodes。`node_id`
+全表唯一：共享 ancestor 可以在多个 branch prompt 中当 context，但不能沿每条
+root-to-leaf 路径重复成为 Card ownership。删除可塑尾卡时映射随 FK cascade 删除，
+成功新尾再重建 coverage。
 
 ## card_tags（标签，entity overlap + 共现的源）
 

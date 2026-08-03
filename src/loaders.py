@@ -8,8 +8,20 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from config import agent_name, room_for_source_route, user_name, user_source_label
-from memory_types import Message
+from config import (
+    agent_name,
+    room_for_source_route,
+    user_name,
+    user_source_label,
+    validate_source_room,
+)
+from memory_types import (
+    ConversationNode,
+    ConversationObservation,
+    ConversationTreeBatch,
+    IngestLoad,
+    Message,
+)
 
 # ── v4 两阶段加载 ───────────────────────────────────────────────────────────
 # 阶段一：candidate 加载器解析/过滤/抽字段，但 **不** 定 round/message_seq，只带一个可比较的
@@ -32,8 +44,20 @@ def load_messages_for_ingest(paths: list[Path]) -> list[Message]:
     一次调用可混合家族（v4 重建会把 JSONL 房间和导出归档一起灌）——去重和分会话编号
     对并集天然正确。normalized v2 也走 assign_rounds；只有 legacy normalized/test 保留显式 round。
     """
+    loaded = load_sources_for_ingest(paths)
+    if loaded.conversation_trees:
+        raise ValueError(
+            "conversation-tree inputs require load_sources_for_ingest() so nodes "
+            "and observations cannot be silently dropped"
+        )
+    return list(loaded.messages)
+
+
+def load_sources_for_ingest(paths: list[Path]) -> IngestLoad:
+    """Load legacy/v2 messages and v1 conversation-tree batches without mixing layers."""
     candidates: list[dict[str, Any]] = []
     explicit: list[Message] = []
+    trees: list[ConversationTreeBatch] = []
     for path in paths:
         family = classify_source(path)
         if family == "jsonl":
@@ -41,11 +65,15 @@ def load_messages_for_ingest(paths: list[Path]) -> list[Message]:
         elif family == "export":
             candidates.extend(load_claude_export_candidates(path))
         elif family == "normalized":
-            explicit.extend(load_normalized_json(path))
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("format") == "neroli-conversation-tree-v1":
+                trees.append(load_conversation_tree(data, path))
+            else:
+                explicit.extend(load_normalized_items(data, path))
         elif family == "test":
             explicit.extend(load_test_transcript(path))
     messages = assign_rounds(candidates) if candidates else []
-    return messages + explicit
+    return IngestLoad(tuple(messages + explicit), tuple(trees))
 
 
 def session_ids_in_paths(paths: list[Path]) -> set[str]:
@@ -297,9 +325,13 @@ def load_normalized_json(path: Path) -> list[Message]:
 def load_normalized_items(data: Any, path: Path) -> list[Message]:
     if isinstance(data, dict) and data.get("format") == "neroli-normalized-v2":
         return load_normalized_v2(data, path)
+    if isinstance(data, dict) and data.get("format") == "neroli-conversation-tree-v1":
+        raise ValueError(
+            "conversation-tree input must be loaded as a tree batch, not flattened to messages"
+        )
     if not isinstance(data, list):
         raise ValueError(
-            f"expected a legacy JSON array or neroli-normalized-v2 envelope in {path}"
+            f"expected a legacy JSON array or supported Neroli envelope in {path}"
         )
     messages: list[Message] = []
     seq_by_round: dict[int, int] = {}
@@ -456,6 +488,175 @@ def load_normalized_v2(data: dict[str, Any], path: Path) -> list[Message]:
     return assign_rounds(candidates)
 
 
+def load_conversation_tree(
+    data: dict[str, Any], path: Path
+) -> ConversationTreeBatch:
+    """Validate the additive node/parent contract without projecting a runtime head.
+
+    Nodes are canonical source facts. Observations are optional append-only facts for
+    history rendering and never become messages/turns in this loader.
+    """
+    source = _required_string(data, "source", path)
+    room = _required_string(data, "room", path)
+    validate_source_room(source, room)
+    raw_nodes = data.get("nodes")
+    if not isinstance(raw_nodes, list):
+        raise ValueError(f"neroli-conversation-tree-v1 nodes must be an array in {path}")
+    raw_observations = data.get("observations", [])
+    if not isinstance(raw_observations, list):
+        raise ValueError(
+            f"neroli-conversation-tree-v1 observations must be an array in {path}"
+        )
+
+    nodes: list[ConversationNode] = []
+    native_ids: set[str] = set()
+    identities: dict[str, tuple[Any, ...]] = {}
+    for index, item in enumerate(raw_nodes):
+        if not isinstance(item, dict):
+            raise ValueError(f"node {index} must be an object in {path}")
+        native_node_id = _required_string(item, "native_node_id", path, index=index)
+        if native_node_id in native_ids:
+            raise ValueError(f"duplicate native_node_id {native_node_id!r} in {path}")
+        native_ids.add(native_node_id)
+        native_parent_node_id = _optional_string(item, "native_parent_node_id") or None
+        occurred_at = _optional_utc_timestamp(item.get("occurred_at"), path, index, "node")
+        kind = _required_string(item, "kind", path, index=index)
+        if kind not in {"message", "tool", "checkpoint", "event"}:
+            raise ValueError(f"node {index} has invalid kind {kind!r} in {path}")
+        source_type = _required_string(item, "source_type", path, index=index)
+        role: str | None = None
+        text: str | None = None
+        message_json: str | None = None
+        provider: str | None = None
+        model: str | None = None
+        raw_message = item.get("message")
+        if kind == "message":
+            if not isinstance(raw_message, dict):
+                raise ValueError(f"message node {index} requires message object in {path}")
+            raw_role = raw_message.get("role")
+            if raw_role not in {"user", "assistant"}:
+                raise ValueError(
+                    f"message node {index} has invalid role {raw_role!r} in {path}"
+                )
+            content = raw_message.get("content")
+            if not isinstance(content, list) or not content:
+                raise ValueError(
+                    f"message node {index} content must be a non-empty array in {path}"
+                )
+            parts: list[str] = []
+            normalized_content: list[dict[str, str]] = []
+            for part_index, part in enumerate(content):
+                if (
+                    not isinstance(part, dict)
+                    or part.get("type") != "text"
+                    or not isinstance(part.get("text"), str)
+                ):
+                    raise ValueError(
+                        f"message node {index} content {part_index} must be a text block in {path}"
+                    )
+                parts.append(part["text"])
+                normalized_content.append({"type": "text", "text": part["text"]})
+            text = "\n".join(parts).strip()
+            if not text:
+                raise ValueError(f"message node {index} has empty portable text in {path}")
+            role = raw_role
+            provider = _optional_string(raw_message, "provider") or None
+            model = _optional_string(raw_message, "model") or None
+            message_json = json.dumps(
+                {"role": role, "content": normalized_content},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        elif raw_message is not None:
+            raise ValueError(f"non-message node {index} cannot carry message in {path}")
+
+        node_id = _canonical_tree_id("node", source, room, native_node_id)
+        parent_node_id = (
+            _canonical_tree_id("node", source, room, native_parent_node_id)
+            if native_parent_node_id
+            else None
+        )
+        identity = (
+            parent_node_id, occurred_at, kind, source_type, role, text,
+            message_json, provider, model,
+        )
+        previous = identities.get(node_id)
+        if previous is not None and previous != identity:
+            raise ValueError(
+                f"immutable native_node_id {native_node_id!r} has conflicting content in {path}"
+            )
+        identities[node_id] = identity
+        nodes.append(
+            ConversationNode(
+                node_id=node_id,
+                source=source,
+                room=room,
+                native_node_id=native_node_id,
+                parent_node_id=parent_node_id,
+                native_parent_node_id=native_parent_node_id,
+                occurred_at=occurred_at,
+                kind=kind,
+                source_type=source_type,
+                role=role,
+                text=text,
+                message_json=message_json,
+                provider=provider,
+                model=model,
+            )
+        )
+
+    observations: list[ConversationObservation] = []
+    for index, item in enumerate(raw_observations):
+        if not isinstance(item, dict):
+            raise ValueError(f"observation {index} must be an object in {path}")
+        kind = _required_string(item, "kind", path, index=index)
+        native_context_id = _required_string(
+            item, "native_context_id", path, index=index
+        )
+        native_node_id = _required_string(item, "native_node_id", path, index=index)
+        observed_at = _canonical_utc_timestamp(
+            _required_string(item, "observed_at", path, index=index), path, index
+        )
+        payload = item.get("payload", {})
+        if not isinstance(payload, dict):
+            raise ValueError(f"observation {index} payload must be an object in {path}")
+        payload_json = json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        node_id = _canonical_tree_id("node", source, room, native_node_id)
+        digest_input = json.dumps(
+            [source, room, native_context_id, kind, observed_at, node_id, payload],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        observation_id = "observation:" + hashlib.sha256(
+            digest_input.encode("utf-8")
+        ).hexdigest()[:32]
+        observations.append(
+            ConversationObservation(
+                observation_id=observation_id,
+                source=source,
+                room=room,
+                native_context_id=native_context_id,
+                kind=kind,
+                observed_at=observed_at,
+                node_id=node_id,
+                native_node_id=native_node_id,
+                payload_json=payload_json,
+            )
+        )
+
+    return ConversationTreeBatch(
+        source=source,
+        room=room,
+        source_file=str(path),
+        nodes=tuple(nodes),
+        observations=tuple(observations),
+    )
+
+
 def _required_string(
     item: dict[str, Any], key: str, path: Path, *, index: int | None = None
 ) -> str:
@@ -483,6 +684,24 @@ def _utc_timestamp(value: str, path: Path, index: int) -> str:
             f"message {index} occurred_at must include a UTC offset in {path}"
         )
     return value
+
+
+def _canonical_utc_timestamp(value: str, path: Path, index: int) -> str:
+    validated = _utc_timestamp(value, path, index)
+    parsed = dt.datetime.fromisoformat(validated.replace("Z", "+00:00"))
+    return parsed.astimezone(dt.UTC).isoformat(timespec="microseconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def _optional_utc_timestamp(
+    value: Any, path: Path, index: int, label: str
+) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} {index} occurred_at must be ISO 8601 UTC in {path}")
+    return _canonical_utc_timestamp(value.strip(), path, index)
 
 
 def load_test_transcript(path: Path) -> list[Message]:
@@ -532,6 +751,13 @@ def _normalized_native_id(source: str, session_id: str, native_id: str) -> str:
 
 def _canonical_native_id(kind: str, source: str, native_id: str) -> str:
     digest = hashlib.sha256(f"{source}|{native_id}".encode("utf-8")).hexdigest()
+    return f"{kind}:{digest[:32]}"
+
+
+def _canonical_tree_id(kind: str, source: str, room: str, native_id: str) -> str:
+    digest = hashlib.sha256(
+        f"{source}|{room}|{native_id}".encode("utf-8")
+    ).hexdigest()
     return f"{kind}:{digest[:32]}"
 
 

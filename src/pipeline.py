@@ -147,7 +147,7 @@ def check_card_gen_threshold(conn: sqlite3.Connection) -> tuple[bool, str]:
             FROM (
               SELECT DISTINCT session_id, round
               FROM turns
-              WHERE created_at > ?
+              WHERE created_at > ? AND is_context = 0
             )
             """,
             (last_success,),
@@ -159,6 +159,7 @@ def check_card_gen_threshold(conn: sqlite3.Connection) -> tuple[bool, str]:
             FROM (
               SELECT DISTINCT session_id, round
               FROM turns
+              WHERE is_context = 0
             )
             """
         ).fetchone()["n"]
@@ -180,6 +181,13 @@ def sessions_needing_update(conn: sqlite3.Connection) -> list[tuple[str, str]]:
         pattern for pattern in raw_exempt_globs
         if isinstance(pattern, str) and pattern
     ] if isinstance(raw_exempt_globs, list) else []
+    raw_exempt_sources = s.get("min_first_session_turns_exempt_sources", [])
+    if isinstance(raw_exempt_sources, str):
+        raw_exempt_sources = [raw_exempt_sources]
+    exempt_sources = {
+        source for source in raw_exempt_sources
+        if isinstance(source, str) and source
+    } if isinstance(raw_exempt_sources, list) else set()
     exempt_clause = ""
     if exempt_globs:
         matches = " OR ".join("et.source_file GLOB ?" for _ in exempt_globs)
@@ -234,6 +242,10 @@ def sessions_needing_update(conn: sqlite3.Connection) -> list[tuple[str, str]]:
         LEFT JOIN fork_delta fd ON fd.session_id = t.session_id
         LEFT JOIN card_stats pc ON pc.session_id = f.parent_session_id
         WHERE t.max_round > COALESCE(c.last_card_end, f.fork_round, 0)
+          AND NOT EXISTS (
+            SELECT 1 FROM conversation_card_branches tree_branch
+            WHERE tree_branch.session_id = t.session_id
+          )
           AND (
             COALESCE(c.card_count, 0) > 0
             OR CASE
@@ -255,7 +267,7 @@ def sessions_needing_update(conn: sqlite3.Connection) -> list[tuple[str, str]]:
           )
         ORDER BY last_activity DESC
     """, (min_first_session_turns, *exempt_globs)).fetchall()
-    results = []
+    ranked_results: list[tuple[str, str, str]] = []
     for r in rows:
         # v2 adapter 的本机 policy 结果优先；legacy 才从 source_file/project_dir 派生。
         # 能派生就用它——
@@ -264,8 +276,36 @@ def sessions_needing_update(conn: sqlite3.Connection) -> list[tuple[str, str]]:
         room = room_for_session(conn, r["session_id"]) or (
             r["card_room"] if r["card_room"] in ROOMS else DEFAULT_ROOM
         )
-        results.append((r["session_id"], room))
-    return results
+        ranked_results.append((r["session_id"], room, r["last_activity"] or ""))
+
+    tree_rows = conn.execute(
+        """
+        SELECT branch.session_id, branch.room, branch.source,
+               COUNT(DISTINCT CASE WHEN t.is_context = 0 THEN t.round END) AS owned_rounds,
+               COUNT(DISTINCT own_card.card_id) AS card_count,
+               MAX(t.created_at) AS last_activity,
+               SUM(CASE WHEN t.is_context = 0 AND covered.node_id IS NULL THEN 1 ELSE 0 END)
+                 AS uncovered_nodes
+        FROM conversation_card_branches branch
+        JOIN turns t ON t.session_id = branch.session_id
+        LEFT JOIN card_nodes covered ON covered.node_id = t.source_uuid
+        LEFT JOIN cards own_card ON own_card.session_id = branch.session_id
+        GROUP BY branch.session_id, branch.room, branch.source
+        HAVING uncovered_nodes > 0
+        """
+    ).fetchall()
+    for row in tree_rows:
+        if (
+            row["card_count"] > 0
+            or row["owned_rounds"] >= min_first_session_turns
+            or row["source"] in exempt_sources
+        ):
+            ranked_results.append(
+                (row["session_id"], row["room"], row["last_activity"] or "")
+            )
+
+    ranked_results.sort(key=lambda item: (item[2], item[0]), reverse=True)
+    return [(session_id, room) for session_id, room, _activity in ranked_results]
 
 
 def auto_generate_cards(

@@ -32,6 +32,7 @@ bin/cli.py --auto-cards --dry-run
 | `min_interval_minutes` | 60 | 距上次出卡的最小间隔（分钟） |
 | `min_first_session_turns` | 3 | 无卡新 session 首次出卡的最低 turns 数（≤2 turns 不出卡）；已有卡的 session 不受此限制 |
 | `min_first_session_turns_exempt_source_globs` | `[]` | 来源文件匹配任一 SQLite GLOB 时，绕过首次出卡 turns 门槛；例如 `*/phone-*.jsonl` |
+| `min_first_session_turns_exempt_sources` | `[]` | tree adapter 的 `source` 精确匹配时绕过首次门槛；属本机 memory policy，不进 adapter contract |
 | `max_sessions_per_trigger` | 10 | 每次触发最多处理几个 session |
 | `model` | gpt-5.5 | 模型名 |
 | `reasoning_effort` | low | codex exec 的 reasoning effort。合法值：`minimal`/`low`/`medium`/`high`/`xhigh`/`max`/`ultra`——注意 ChatGPT 界面的 "light thinking" 对应这里的 `low`，写 `light` 会被 codex 拒掉导致出卡静默失败 |
@@ -57,7 +58,13 @@ revision，所以 cards/index 写同一个 DB 不会自触发，幂等重扫也�
 | `card_poll_seconds` | 5 | 水位轮询间隔 |
 
 nightly 仍独立负责冷 session 补漏、index、last24 与 curator；不要把白天 watcher 合并进
-nightly，也不要让新 adapter 直接调用 Card Gen。adapter 只需正确写 `messages` / `turns`。
+nightly，也不要让新 adapter 直接调用 Card Gen。adapter 只提交公开 contract；
+Ingest 负责让可对话的新树节点最终进入 `messages` / `turns`。
+
+Tree adapter 是输入形状的差异，不是另一套 Card Gen：Ingest 保存
+`conversation_nodes` 后投影出 Card-only branch sessions。`turns.is_context=1` 的共享
+ancestor 可读但不计新物料，`card_nodes` 保证一个 canonical node 最多被一张卡
+拥有。`conversation_observations` 不写 turns，因而 cursor 移动不唤醒、不改写卡。
 
 ## 模型配置
 
