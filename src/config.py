@@ -87,6 +87,23 @@ def validate_source_room(source: str, room: str) -> str:
     return room
 
 
+def project_tree_cards_for_source(source: str) -> bool:
+    """Whether this instance should project a tree source into Card turns.
+
+    Missing configuration keeps the normal contract behavior (all tree sources
+    project).  A source may be omitted temporarily when the same native journal
+    is still feeding Cards through a legacy compatibility projection.
+    """
+    configured = load_settings().get("ingest", {}).get(
+        "tree_card_projection_sources"
+    )
+    if configured is None:
+        return True
+    if not isinstance(configured, list):
+        raise ValueError("ingest.tree_card_projection_sources must be an array")
+    return source in {item for item in configured if isinstance(item, str)}
+
+
 def load_settings() -> dict:
     return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
 

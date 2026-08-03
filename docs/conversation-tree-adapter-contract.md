@@ -33,13 +33,16 @@ tree-aware adapters use this incremental contract.
 | Runtime cursor | RPC `leafId` | `last-prompt.leafUuid` | Optional append-only `cursor` observation for rendering; never node status or Card input |
 | Room | Porch knows the selected room profile | Adapter knows its explicitly enrolled project/room | Adapter submits `room`; Neroli validates but does not remap it |
 
-Local inspection deliberately excluded conversation bodies. Replayed Claude UUIDs
-kept identical payload, timestamp, and provider/model facts. Many UUIDs occurred
-under more than one `sessionId`, and a few replay records showed later parent
-variants. Therefore a source session is useful adapter provenance but not
-canonical node ownership. Resolving the exceptional replay variants into stable
-normalized nodes is Claude-adapter work, not a reason to make Neroli interpret
-Claude lifecycle semantics.
+Full-corpus structural inspection deliberately did not print conversation bodies.
+Across 624 JSONL files, 77,966 valid rows contained 45,381 distinct UUID-bearing
+nodes. There were 7,073 replayed UUID groups (10,541 duplicate occurrences),
+including 6,306 groups crossing session containers. Portable content, timestamp,
+role, and provider/model facts did not conflict. One UUID had a parent variant:
+the later replay placed an existing node below a compaction summary while the
+original non-compaction parent remained stable. Therefore a source session is
+useful adapter provenance but not canonical node ownership. Resolving replay and
+compaction bookkeeping into stable normalized nodes is Claude-adapter work, not
+a reason to make Neroli interpret Claude lifecycle semantics.
 
 ## Envelope
 
@@ -197,6 +200,24 @@ it requires no Pi source modification or fork.
   context and observation time, may be submitted as a `cursor` observation. It
   never privileges that branch for Card generation.
 - Explicitly enrolled project/room configuration -> envelope `room`.
+
+`src/claude_code_adapter.py` implements this mapping. It emits each UUID once,
+hard-fails changed portable content or genuinely ambiguous non-compaction parents,
+and chooses the sole stable non-compaction parent for the observed compaction
+replay case. It retains ordinary text block boundaries and block-internal
+whitespace plus structural tool/checkpoint/event
+skeletons; thinking, raw tool payloads, credentials, attachments, and last-prompt
+text remain only in the original adapter-owned JSONL. Explicit Claude runtime
+injections embedded in user text keep the legacy filter rather than becoming
+portable user content.
+
+During the current local migration, Claude Code runs in history-only tree mode:
+its canonical nodes and cursor observations are stored, while the pre-existing
+legacy Claude loader remains the only projection into Card turns. This prevents
+duplicate historical turns/Cards while preserving the already-verified Card
+behavior. The split is receiving-instance policy, not a new wire-format feature;
+new tree sources normally project directly, and retiring the compatibility path
+requires an explicit identity migration.
 
 ## Neroli tree layer
 

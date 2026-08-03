@@ -8,7 +8,16 @@ import os
 import shlex
 from pathlib import Path
 
-from config import MEMORY, PROJECT_DIRS, ROOMS, custom_cli_cmd, load_settings, model_provider
+from config import (
+    MEMORY,
+    PROJECT_DIRS,
+    ROOMS,
+    custom_cli_cmd,
+    load_settings,
+    model_provider,
+    project_tree_cards_for_source,
+    room_for_source_file,
+)
 from context import rebuild_context
 from db import (
     DB,
@@ -20,7 +29,7 @@ from db import (
     reconcile_deleted_files,
     refresh_session_forks,
 )
-from loaders import load_sources_for_ingest, message_to_dict
+from loaders import load_conversation_tree, load_sources_for_ingest, message_to_dict
 from model import build_model
 from pipeline import auto_generate_cards, finalize_card_updates, process_session, rebuild_index, reroom_cards
 
@@ -60,6 +69,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--history-context", default=None, help="Optional native context/session filter for --render-history.")
     parser.add_argument("--dump-json", type=Path, help="Normalize inputs to JSON, then exit.")
     parser.add_argument("--ingest-only", action="store_true", help="Write input turns to SQLite without running the model.")
+    parser.add_argument(
+        "--ingest-claude-tree",
+        action="store_true",
+        help="Also normalize configured Claude Code JSONL into canonical tree history.",
+    )
     parser.add_argument("--process-existing", action="store_true", help="Run the model from turns already in SQLite without reading input files.")
     parser.add_argument("--session-id", action="append", help="Limit processing to one session id. Can be passed more than once.")
     parser.add_argument("--session-file", type=Path, help="Read session ids from a text file.")
@@ -89,6 +103,7 @@ def run(argv: list[str] | None = None) -> int:
         args.process_existing = True
         args.skip_processed = True
     inputs = [] if args.process_existing else (args.inputs or default_inputs())
+    all_scan_inputs = list(inputs)
     has_explicit_inputs = bool(args.inputs)
     # 扫描模式 = watcher 那种「不给输入、不指定 session、不 process-existing」的全房间重读。
     # 只有它才做增量文件选择；显式输入 / 指定 session 的手动调用照旧全读。
@@ -296,21 +311,51 @@ def run(argv: list[str] | None = None) -> int:
             state_path = state_path_for(args.db)
             inputs, new_mtimes = select_incremental(conn, inputs, load_state(state_path))
 
-    if inputs:
+    claude_trees = []
+    if args.ingest_claude_tree and inputs:
+        from claude_code_adapter import export_claude_code_tree
+
+        tree_inputs = all_scan_inputs if scan_mode else list(inputs)
+        by_room: dict[str, list[Path]] = {}
+        for path in tree_inputs:
+            if path.suffix.lower() != ".jsonl":
+                continue
+            room = room_for_source_file(str(path))
+            if room is None:
+                raise ValueError(
+                    f"Claude Code tree input is outside configured project dirs: {path}"
+                )
+            by_room.setdefault(room, []).append(path)
+        for room, room_paths in sorted(by_room.items()):
+            envelope = export_claude_code_tree(room_paths, room=room)
+            claude_trees.append(
+                load_conversation_tree(
+                    envelope, Path(f"claude-code-{room}-tree.json")
+                )
+            )
+
+    if inputs or claude_trees:
         # ingest 必须读完整文件：round 编号跨文件一次性算，截断会让轮次漂移。
         # --max-messages 不影响 ingest（出卡步在 generate() 里自己开窗），只用于 --dump-json。
         loaded = load_sources_for_ingest(inputs)
         all_messages = list(loaded.messages)
         new_session_ids = ingest_turns(conn, all_messages) if all_messages else []
-        for tree in loaded.conversation_trees:
-            new_session_ids.extend(ingest_conversation_tree(conn, tree))
+        all_trees = [*loaded.conversation_trees, *claude_trees]
+        for tree in all_trees:
+            new_session_ids.extend(
+                ingest_conversation_tree(
+                    conn,
+                    tree,
+                    project_cards=project_tree_cards_for_source(tree.source),
+                )
+            )
         new_session_ids = sorted(set(new_session_ids))
         if not session_ids:
             session_ids = new_session_ids
         else:
             session_ids = sorted(set(session_ids) & set(new_session_ids))
-        tree_nodes = sum(len(tree.nodes) for tree in loaded.conversation_trees)
-        observations = sum(len(tree.observations) for tree in loaded.conversation_trees)
+        tree_nodes = sum(len(tree.nodes) for tree in all_trees)
+        observations = sum(len(tree.observations) for tree in all_trees)
         print(
             f"loaded {len(all_messages)} messages + {tree_nodes} tree nodes + "
             f"{observations} observations; sessions with new turns: {len(session_ids)}"

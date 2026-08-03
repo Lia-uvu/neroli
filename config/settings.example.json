@@ -74,7 +74,7 @@
   },
 
   "ingest": {
-    "_comment": "source_rooms authorizes adapter-owned room origin for the conversation-tree contract. source_routes remains the private compatibility mapping for normalized v2. Unknown rooms/routes are rejected instead of falling back to the default room. fork_min_shared_turns applies to legacy inferred session forks only. origin_data_dir (optional): Claude.ai export archive; leave empty if unused.",
+    "_comment": "source_rooms authorizes adapter-owned room origin for the conversation-tree contract. tree_card_projection_sources normally lists every tree source; during a source migration, omit a tree source only while the same journal still feeds Cards through one legacy compatibility projection. source_routes remains the private compatibility mapping for normalized v2. Unknown rooms/routes are rejected instead of falling back to the default room. fork_min_shared_turns applies to legacy inferred session forks only. origin_data_dir (optional): Claude.ai export archive; leave empty if unused.",
     "fork_min_shared_turns": 2,
     "origin_data_dir": "",
     "source_routes": {
@@ -84,7 +84,8 @@
     },
     "source_rooms": {
       "example-adapter": ["main"]
-    }
+    },
+    "tree_card_projection_sources": ["example-adapter"]
   },
 
   "backup": {

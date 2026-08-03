@@ -38,6 +38,13 @@ observation 只写 `conversation_observations`，History 用它还原 runtime �
 不依赖 Claude Code 的 fswatch，也不要求每个未来 adapter 额外 import 或调用 Card Gen。
 nightly 是独立的冷 session 补漏、index、last24、curator 流程，不承担白天唤醒职责。
 
+本机 Claude Code 迁移暂时是有边界的双写：`src/claude_code_adapter.py` 把完整原始
+JSONL 归一成 canonical tree + cursor observations，供 History/未来 GUI 使用；同一批
+JSONL 仍由既有 loader 单独投影到 `messages` / `turns`，继续作为现有 Card 的唯一输入。
+`ingest.tree_card_projection_sources` 只用于这种同一 journal 已有兼容 Card 投影的迁移期，
+避免树桥再次生成一套 turns；普通 tree source（当前 Porch）仍直接投影 Card material。
+移除 Claude 旧 loader 前，必须另做 Card/turn identity 对齐与迁移，不能只把开关翻过来。
+
 新的 tree-aware adapter 使用 [`neroli-conversation-tree-v1`](docs/conversation-tree-adapter-contract.md)：
 adapter 交完整树和它明确服务的 room，Neroli 校验本机 `ingest.source_rooms` 授权。
 [`neroli-normalized-v2`](docs/normalized-adapter-contract.md) 作为线性 adapter 的兼容契约继续保留：adapter 交

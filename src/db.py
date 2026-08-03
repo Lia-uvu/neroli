@@ -152,7 +152,10 @@ def ingest_turns(conn: sqlite3.Connection, messages: list[Message]) -> list[str]
 
 
 def ingest_conversation_tree(
-    conn: sqlite3.Connection, batch: ConversationTreeBatch
+    conn: sqlite3.Connection,
+    batch: ConversationTreeBatch,
+    *,
+    project_cards: bool = True,
 ) -> list[str]:
     """Persist one additive tree batch and refresh its Card-only branch projection.
 
@@ -165,14 +168,15 @@ def ingest_conversation_tree(
     try:
         for node in ordered:
             _insert_or_assert_tree_node(conn, node)
-        for node in ordered:
-            branch_id, newly_assigned = _assign_tree_branch(conn, node)
-            if newly_assigned:
-                changed_branches.add(branch_id)
-            if node.kind == "message":
-                _insert_tree_message(conn, node)
-        for branch_id in sorted(changed_branches):
-            _rebuild_tree_branch_turns(conn, branch_id)
+        if project_cards:
+            for node in ordered:
+                branch_id, newly_assigned = _assign_tree_branch(conn, node)
+                if newly_assigned:
+                    changed_branches.add(branch_id)
+                if node.kind == "message":
+                    _insert_tree_message(conn, node)
+            for branch_id in sorted(changed_branches):
+                _rebuild_tree_branch_turns(conn, branch_id)
         for observation in batch.observations:
             node = conn.execute(
                 "SELECT source, room FROM conversation_nodes WHERE node_id = ?",
@@ -202,7 +206,8 @@ def ingest_conversation_tree(
                     observation.payload_json,
                 ),
             )
-        refresh_session_forks(conn)
+        if project_cards:
+            refresh_session_forks(conn)
         conn.execute("RELEASE SAVEPOINT ingest_conversation_tree")
         conn.commit()
     except Exception:

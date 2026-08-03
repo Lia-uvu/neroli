@@ -145,6 +145,41 @@ class ConversationTreeContractTest(unittest.TestCase):
             ["root", "right"],
         )
 
+    def test_history_only_transition_does_not_project_card_material(self) -> None:
+        before = self.revision()
+        branches = db.ingest_conversation_tree(
+            self.conn, self.load(envelope()), project_cards=False
+        )
+
+        self.assertEqual(branches, [])
+        self.assertEqual(self.revision(), before)
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM conversation_nodes").fetchone()[0],
+            3,
+        )
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM conversation_observations"
+            ).fetchone()[0],
+            1,
+        )
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 0)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0], 0)
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM conversation_card_branches"
+            ).fetchone()[0],
+            0,
+        )
+        rendered = render_history(
+            self.conn,
+            room="den",
+            source="fake-tree",
+            native_context_id="runtime-session",
+        )
+        self.assertEqual(len(rendered["nodes"]), 3)
+        self.assertEqual(rendered["observations"][0]["native_node_id"], "left")
+
     def test_fork_cards_can_both_include_the_shared_ancestor(self) -> None:
         db.ingest_conversation_tree(self.conn, self.load(envelope()))
         owner_rows = self.conn.execute(

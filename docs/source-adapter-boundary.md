@@ -66,6 +66,14 @@ boundaries and fork context may legitimately map the same canonical node to more
 than one Card through `card_nodes`.
 Observation-only updates write no turns and do not wake Card Gen.
 
+One receiving instance may temporarily persist a tree source without projecting
+it to Card turns only when the same native journal is already feeding Cards
+through one compatibility loader. `ingest.tree_card_projection_sources` records
+that transition boundary. It must not be used to silently make a captured source
+ineligible for memory: the compatibility projection remains the sole Card input
+until identities and historical Cards are explicitly migrated. Current Claude
+Code ingestion uses this dual-write transition; Porch projects its tree directly.
+
 ## What normalized v2 input means today
 
 The current input is a collection of immutable message nodes with optional parent

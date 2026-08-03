@@ -7,7 +7,7 @@
 
 | Label | 时间 | 干什么 |
 |------|------|------|
-| `local.recall-watch-ingest` | 实时（KeepAlive） | fswatch Claude Code JSONL → ingest；只负责该来源入库 |
+| `local.recall-watch-ingest` | 实时（KeepAlive） | fswatch Claude Code JSONL → legacy Card turns + canonical tree/history；不调用模型 |
 | `local.recall-watch-cards` | 白天实时（KeepAlive） | 轮询 DB `turns` 水位 → `--auto-cards`；所有 ingest 来源共用 |
 | `local.recall-nightly` | 04:00 | 索引 + cards-last-24 + 可选 last24 summary + curator；`nightly.generate_missing_cards=true` 时才补漏出卡 |
 | `local.recall-backup` | 定时 | `bin/backup-db.sh`：DB .backup → 配置的备份目录 |
@@ -67,6 +67,7 @@ timeout 可达 900 秒，不能再用旧的 300 秒年龄阈值）；owner 已�
 | `watcher.ingest_debounce_seconds` | 5 | fswatch 全量 ingest 的去抖间隔 |
 | `watcher.auto_cards` | true | DB `turns` 水位变化时，白天 card watcher 是否调用 `--auto-cards` |
 | `watcher.card_poll_seconds` | 5 | card watcher 轮询 DB 水位的间隔 |
+| `ingest.tree_card_projection_sources` | 所有 tree source | 迁移开关；只可暂时排除仍由同一 journal 的 legacy loader 唯一出卡的来源 |
 | `nightly.generate_missing_cards` | false | 夜间是否给无卡 session 补漏出卡（避免大额模型重跑） |
 
 ## 备份

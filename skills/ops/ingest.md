@@ -15,12 +15,22 @@ bin/cli.py --render-history --history-room ROOM --history-source porch
 # 全量重读（round 跨文件一次算；--max-messages 0 = 不截断）
 bin/cli.py --ingest-only --max-messages 0
 
+# Claude Code canonical tree 兼容性审计：隔离临时库运行两遍，不改生产、不跑模型
+python3 scripts/audit_claude_tree_adapter.py
+
+# 只把 Claude Code tree/observations 幂等回填到指定库；默认不生成 Card turns、不跑模型
+python3 scripts/ingest_claude_tree.py --dry-run
+python3 scripts/ingest_claude_tree.py --db data/fragments.db
+
 # 只导入 Claude.ai 下载包里的 conversations.json（不碰 projects/users/memories）
 python3 scripts/ingest_claude_ai_exports.py --dry-run
 python3 scripts/ingest_claude_ai_exports.py
 ```
 
 Claude Code 的实时 ingest 由 launchd fswatch watcher 自动跑（见 [common.md](common.md)）。
+watcher 同一轮读取原始 JSONL：既有 loader 继续更新旧 Card turns，Claude tree adapter
+同时幂等更新 canonical tree/history。当前本机 `tree_card_projection_sources` 不含
+`claude-code`，所以 tree 侧不会再投影第二份 turns；移除旧 loader 前不得启用该项。
 其他来源可以有各自的 adapter / 调度；所有来源最终只写统一的 `source_sessions` / `messages` / `turns`。schema v10+
 在 `turns` 上维护来源无关的变更水位，独立白天 card watcher 因而无需知道是哪一个 adapter 写入。
 
@@ -71,6 +81,11 @@ watcher 的全房间重读默认走增量：只重读 mtime 变过的文件，**
 Tree v1 的 observation 只写 `conversation_observations`。验收时记录入库前后
 `change_watermarks.turns`：只改 cursor/observation 时 revision 必须不变；`--render-history`
 的 observed path 应更新。
+
+迁移期的 history-only ingest 还必须同时核对 `model_calls`、legacy message/turn/Card 计数和
+watermark 均不变。`scripts/audit_claude_tree_adapter.py` 会在隔离库两次导入全部已配置
+Claude corpus，并对照旧 loader 的 portable message role/text；它不输出正文，也不调用模型。
+生产回填前先停两个 watcher 并备份数据库，回填后重复运行一次确认幂等，再按 common.md 起回。
 
 ## 新来源 / 清洗脚本
 
