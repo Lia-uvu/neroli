@@ -28,6 +28,23 @@ python3 src/retrieval.py --viewer main --time 2026-06-01 2026-06-24
 python3 src/retrieval.py --viewer secondary 关键词
 ```
 
+## Read-only MCP
+
+```sh
+bin/neroli-mcp.py --db /absolute/path/fragments.db --viewer ROOM
+```
+
+这是供 Porch 等 runtime 使用的 stdio MCP server，暴露固定三项工具：
+
+- `neroli_search`：关键词检索，最多 20 条 compact Card refs；
+- `neroli_card`：展开一张可见 Card，单字段最多 12,000 字符；
+- `neroli_session_context`：同 session 有界前后文，最多 30 条 compact refs。
+
+viewer 是 server 启动参数，不出现在工具 schema；数据库用 SQLite `mode=ro` 加
+`PRAGMA query_only=ON` 打开。MCP 不暴露 `--turns`、semantic search、history 整树、ingest 或
+Card generation，因此它不会写 `card_access`、不会调用 embedding/model，也不会让模型扩大
+自己的 room 权限。协议与 privacy regression 在 `tests/search/test_mcp_server.py`。
+
 ## 一次调用拿全（agent 用户的回合经济）
 
 - `关键词 --expand N`：搜完自动展开前 N 条命中全文（每张计一笔 card_access）。

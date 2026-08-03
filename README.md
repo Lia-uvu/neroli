@@ -23,6 +23,11 @@ conversation logs
 ```
 Storage and index are separate layers. Cards hold the full narrative and privacy markings; the index is a derivative structure that organizes and locates cards, and can be rebuilt from them at any time. A short-context agent condenses recent card headlines and can open the filtered source cards before submitting. A nightly curator inhabits each agent's persona in turn, reads the tree-change report, and rewrites that agent's longer-horizon context.
 
+For agent runtimes, `bin/neroli-mcp.py` exposes three bounded read-only MCP tools for keyword search,
+Card detail, and surrounding Cards. The caller fixes the viewer when starting the server; the model
+cannot choose a room, request raw turns, write memory, or trigger model-backed retrieval through this
+surface. See [the Search operations guide](skills/ops/search.md#read-only-mcp).
+
 ## Quick Start
 There is no setup wizard. You hand [`skills/install/SKILL.md`](skills/install/SKILL.md) to your coding agent (Claude Code, Codex CLI, …) and it does the install: a three-question interview (privacy boundary, model access, existing archives), config filled on your behalf, a checkpoint after every stage, platform-native scheduling. The mechanical steps are prefab scripts (`bin/preflight.sh`, `bin/make-launchd.sh`); the agent's job is the judgment work — your boundary, your persona, your harness.
 
@@ -62,6 +67,7 @@ The system is iterated on agent feedback, so the primary users of the memory are
 - [docs/source-adapter-boundary.md](docs/source-adapter-boundary.md) — what source adapters own, what Neroli owns, and the current tree boundary
 - [docs/normalized-adapter-contract.md](docs/normalized-adapter-contract.md) — source adapter contract, canonical identity, ordering, and local room policy
 - [docs/conversation-tree-adapter-contract.md](docs/conversation-tree-adapter-contract.md) — incremental node/parent tree contract with rendering-only observations
+- [skills/ops/search.md](skills/ops/search.md) — retrieval CLI and the read-only MCP surface
 - [schema.md](schema.md) — SQLite schema v13 reference
 
 ## FAQ

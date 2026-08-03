@@ -24,7 +24,7 @@
 | **History** | `history.py` | `conversation_nodes` `conversation_observations` | source-neutral JSON read projection | 否 | [ops/ingest](skills/ops/ingest.md) |
 | **Index** | `graph.py` `community.py` `embedding.py` `cooccur.py` `entity_resolve.py` | `cards` `card_tags` | `clusters` `cluster_members` `entities` `tag_entity_map` | embedding 必需走 API；实体判定 LLM judge 可选（失败软降级） | [ops/index](skills/ops/index.md) |
 | **Context** | `context.py` `tempo.py` | `cards` `turns` | `<room>/cards-last-24.md`（文件） | 否 | [ops/context](skills/ops/context.md) |
-| **Search** | `retrieval.py` | 所有表（只读） | — | 否 | [ops/search](skills/ops/search.md) |
+| **Search** | `retrieval.py` (+`mcp_server.py`) | 所有表（只读） | — | 否 | [ops/search](skills/ops/search.md) |
 | **Midlayer** | `last24.py` `summarycheck.py` `treesnap.py` `curator.py` `submitcheck.py` | `clusters` `cluster_members` `cards` `card_tags` `tag_entity_map` `entities` | `<room>/summary-last-24.md` + `tree_snapshots` `tree_snapshot_members` `digests` `constants` + 房间文件 | last24/curator agent 是；treesnap 否 | [ops/midlayer](skills/ops/midlayer.md) |
 
 ### 白天运行时边界
@@ -62,6 +62,9 @@ adapter 与 Neroli 各自负责什么、当前 parent-linked tree 能表达什�
 - 改动时守住这条线：新代码若让一个模块去 import 另一个模块，多半是逻辑放错了层。
 - **卡可见性谓词**（room viewer 隐私规则）住在存储层 `db.card_visible_clause`，Search / Context /
   Midlayer 共用同一条——隐私规则今后只改这一处。
+- `mcp_server.py` 是 Search 的只读 transport adapter：viewer 在 server 启动时固定，工具 schema
+  不接受 viewer/room；数据库以 `mode=ro` + `query_only` 打开，只复用 `retrieval` 的关键词、
+  Card detail 和 session siblings，不开放 raw turns、semantic/model-backed search 或写接口。
 - Midlayer 内部 `curator → treesnap` 属本模块内依赖（允许）。curator 导出到工作台的 `recall`
   wrapper 是独立入口脚本、在工作台里 import Search 门面（`retrieval`），属工具面而非模块跨 import。
 
@@ -75,7 +78,7 @@ tests/
 ├── ingest/       loader 与增量摄入
 ├── card_gen/     出卡解析、失败安全与 session eligibility
 ├── index/        图索引与实体解析
-├── search/       检索、可见性与相邻卡
+├── search/       检索、可见性、相邻卡与 read-only MCP transport
 ├── midlayer/     last24、tree snapshot、curator 与 submission gate
 ├── runtime/      lock、model runner 与叶子工具
 └── contracts/    来源独立、tree/observation、turns 水位与跨模块 smoke contract
