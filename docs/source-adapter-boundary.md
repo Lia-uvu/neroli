@@ -61,7 +61,9 @@ the batch, and cycles or immutable ID reuse are hard failures.
 
 Portable user/assistant nodes are projected into `messages` / `turns` for the
 existing Card engine. Shared ancestors in peer branch sessions are marked
-`is_context=1`; `card_nodes` enforces one ownership mapping per canonical node.
+`is_context=1`; it does not count as new trigger material, but inclusive Card
+boundaries and fork context may legitimately map the same canonical node to more
+than one Card through `card_nodes`.
 Observation-only updates write no turns and do not wake Card Gen.
 
 ## What normalized v2 input means today

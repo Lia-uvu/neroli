@@ -282,14 +282,21 @@ def sessions_needing_update(conn: sqlite3.Connection) -> list[tuple[str, str]]:
         """
         SELECT branch.session_id, branch.room, branch.source,
                COUNT(DISTINCT CASE WHEN t.is_context = 0 THEN t.round END) AS owned_rounds,
-               COUNT(DISTINCT own_card.card_id) AS card_count,
+               (
+                 SELECT COUNT(*) FROM cards own_card
+                 WHERE own_card.session_id = branch.session_id
+               ) AS card_count,
                MAX(t.created_at) AS last_activity,
-               SUM(CASE WHEN t.is_context = 0 AND covered.node_id IS NULL THEN 1 ELSE 0 END)
+               SUM(CASE WHEN t.is_context = 0 AND NOT EXISTS (
+                 SELECT 1
+                 FROM card_nodes covered
+                 JOIN cards covering_card ON covering_card.card_id = covered.card_id
+                 WHERE covered.node_id = t.source_uuid
+                   AND covering_card.session_id = branch.session_id
+               ) THEN 1 ELSE 0 END)
                  AS uncovered_nodes
         FROM conversation_card_branches branch
         JOIN turns t ON t.session_id = branch.session_id
-        LEFT JOIN card_nodes covered ON covered.node_id = t.source_uuid
-        LEFT JOIN cards own_card ON own_card.session_id = branch.session_id
         GROUP BY branch.session_id, branch.room, branch.source
         HAVING uncovered_nodes > 0
         """

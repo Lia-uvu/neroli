@@ -101,7 +101,7 @@ class TurnsWatermarkTest(unittest.TestCase):
         self.conn.commit()
         self.assertEqual(self.revision(), 1)
 
-    def test_v9_through_v12_migrations_preserve_turns_and_install_contract(self) -> None:
+    def test_v9_through_v13_migrations_preserve_turns_and_install_contract(self) -> None:
         db_path = Path(self.tmp.name) / "migration.db"
         conn = sqlite3.connect(db_path)
         conn.executescript(
@@ -130,6 +130,10 @@ class TurnsWatermarkTest(unittest.TestCase):
               line_no INTEGER,
               created_at TEXT DEFAULT CURRENT_TIMESTAMP,
               UNIQUE(session_id, source_uuid)
+            );
+            CREATE TABLE cards (
+              card_id TEXT PRIMARY KEY,
+              session_id TEXT NOT NULL
             );
             INSERT INTO messages
               (source_uuid, role, speaker, text, timestamp, source)
@@ -209,6 +213,15 @@ class TurnsWatermarkTest(unittest.TestCase):
             conn.execute("SELECT COUNT(*) FROM conversation_nodes").fetchone()[0],
             0,
         )
+
+        migration = (
+            ROOT / "migrations" / "013-card-node-membership.sql"
+        ).read_text(encoding="utf-8")
+        conn.executescript(migration)
+        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 13)
+        card_node_indexes = conn.execute("PRAGMA index_list(card_nodes)").fetchall()
+        self.assertFalse(any(row[2] and row[1] != "sqlite_autoindex_card_nodes_1"
+                             for row in card_node_indexes))
         self.assertEqual(conn.execute("PRAGMA quick_check").fetchone()[0], "ok")
         self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
         conn.close()

@@ -78,10 +78,40 @@ python3 scripts/backup_cards.py        # 卡层 JSON 快照 → data/backups/
 
 ## schema 迁移
 
-规则：版本变更走 `migrations/NNN-*.sql`（手动 `sqlite3 db < 迁移文件`）+ `PRAGMA user_version` 递增，**禁止运行时迁移**。`connect()` 只校验版本。表结构见 [schema.md](../../schema.md)。v10 的 `change_watermarks.turns` 是所有 ingest 来源共用的白天 Card Gen 唤醒边界；v11 增加 canonical adapter provenance 与本机 room policy 结果；v12 增加 conversation tree、渲染 observation 与 Card node ownership。
+规则：版本变更走 `migrations/NNN-*.sql`（手动 `sqlite3 db < 迁移文件`）+ `PRAGMA user_version` 递增，**禁止运行时迁移**。`connect()` 只校验版本。表结构见 [schema.md](../../schema.md)。v10 的 `change_watermarks.turns` 是所有 ingest 来源共用的白天 Card Gen 唤醒边界；v11 增加 canonical adapter provenance 与本机 room policy 结果；v12 增加 conversation tree 与渲染 observation；v13 把 `card_nodes` 校正为允许 inclusive/fork overlap 的多对多 membership。
 
 迁移期间**必须停两个白天 watcher**：既防止 ingest 边迁移边写库，也防止旧 card watcher
 拿新库运行。nightly 若正运行也必须等它正常结束；不要抢活锁。
+
+<details>
+<summary>v12→v13 overlapping Card node membership 迁移</summary>
+
+```sh
+# 1. 停 ingest/card watcher，确认 nightly 和公用锁都不活跃
+launchctl bootout gui/$(id -u)/local.recall-watch-ingest
+launchctl bootout gui/$(id -u)/local.recall-watch-cards 2>/dev/null || true
+test ! -d data/ingest.lock.d
+
+# 2. 在公开仓库外做 SQLite 在线备份
+sqlite3 data/fragments.db ".backup '/绝对路径/fragments-before-v13.db'"
+
+# 3. 显式迁移；保留既有 membership，移除 node_id 全局 UNIQUE
+sqlite3 data/fragments.db < migrations/013-card-node-membership.sql
+
+# 4. 验证版本、完整性与 legacy/Card 计数
+sqlite3 data/fragments.db "PRAGMA user_version; PRAGMA quick_check;
+  PRAGMA foreign_key_check;
+  SELECT COUNT(*) FROM messages;
+  SELECT COUNT(*) FROM turns;
+  SELECT COUNT(*) FROM cards;
+  SELECT COUNT(*) FROM card_nodes;"
+
+# 5. 重启两个白天 watcher
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.recall-watch-ingest.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.recall-watch-cards.plist
+```
+
+</details>
 
 <details>
 <summary>v11→v12 conversation tree + observation 迁移</summary>
@@ -209,7 +239,7 @@ recall-pipeline/
 ├── config/
 │   ├── rooms.json          # 房间唯一事实源
 │   ├── settings.json       # 可调参数
-│   └── schema.sql          # v12 建表 DDL（只用于新库）
+│   └── schema.sql          # v13 建表 DDL（只用于新库）
 ├── prompts/
 │   ├── agent-persona-<room>.md
 │   └── gen-cards-prompt.md
@@ -225,9 +255,9 @@ recall-pipeline/
 │   └── ops/                # 按模块拆的运维 Skill（本目录）
 │       └── SKILL.md        # 运维 Skill 入口 + 索引
 ├── data/
-│   ├── fragments.db        # 生产库（schema v12）
+│   ├── fragments.db        # 生产库（schema v13）
 │   ├── backups/ .emb_cache/ watch.log nightly.log
-├── migrations/             # 002…012（已有库的显式 schema 迁移）
+├── migrations/             # 002…013（已有库的显式 schema 迁移）
 ├── tests/                  # 按组件归属分组的公开回归测试
 ├── ARCHITECTURE.md         # 模块地图（总枢纽）
 └── schema.md               # 表结构速查

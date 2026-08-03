@@ -145,7 +145,7 @@ class ConversationTreeContractTest(unittest.TestCase):
             ["root", "right"],
         )
 
-    def test_card_ownership_never_duplicates_the_shared_ancestor(self) -> None:
+    def test_fork_cards_can_both_include_the_shared_ancestor(self) -> None:
         db.ingest_conversation_tree(self.conn, self.load(envelope()))
         owner_rows = self.conn.execute(
             """
@@ -184,16 +184,82 @@ class ConversationTreeContractTest(unittest.TestCase):
 
         coverage = self.conn.execute(
             """
-            SELECT n.native_node_id, COUNT(*) AS uses
+            SELECT c.session_id, n.native_node_id, COUNT(*) AS uses
             FROM card_nodes covered
+            JOIN cards c ON c.card_id = covered.card_id
             JOIN conversation_nodes n ON n.node_id = covered.node_id
-            GROUP BY n.native_node_id
-            ORDER BY n.native_node_id
+            GROUP BY c.session_id, n.native_node_id
+            ORDER BY c.session_id, n.native_node_id
             """
         ).fetchall()
         self.assertEqual(
-            [(row["native_node_id"], row["uses"]) for row in coverage],
-            [("left", 1), ("right", 1), ("root", 1)],
+            [
+                (row["session_id"], row["native_node_id"], row["uses"])
+                for row in coverage
+            ],
+            sorted([
+                (parent_session, "left", 1),
+                (parent_session, "root", 1),
+                (child_session, "right", 1),
+                (child_session, "root", 1),
+            ]),
+        )
+        root_uses = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM card_nodes covered
+            JOIN conversation_nodes n ON n.node_id = covered.node_id
+            WHERE n.native_node_id = 'root'
+            """
+        ).fetchone()[0]
+        self.assertEqual(root_uses, 2)
+        self.assertFalse(db.tree_session_has_uncovered_nodes(self.conn, parent_session))
+        self.assertFalse(db.tree_session_has_uncovered_nodes(self.conn, child_session))
+
+    def test_inclusive_card_boundaries_can_repeat_nodes_in_one_session(self) -> None:
+        db.ingest_conversation_tree(self.conn, self.load(envelope()))
+        parent_session = self.conn.execute(
+            """
+            SELECT owned.session_id
+            FROM conversation_node_branches owned
+            JOIN conversation_nodes n ON n.node_id = owned.node_id
+            WHERE n.native_node_id = 'root'
+            """
+        ).fetchone()[0]
+        for index in (1, 2):
+            card_id = f"{parent_session[:8]}#overlap-{index}"
+            db.insert_card(
+                self.conn,
+                {
+                    "card_id": card_id,
+                    "session_id": parent_session,
+                    "turns": [1, 1],
+                    "headline": f"overlap {index}",
+                    "share": "boundary",
+                    "private": "",
+                    "tags": [],
+                    "room": "den",
+                    "model": "fixture",
+                    "raw": "fixture",
+                },
+            )
+            db.attach_card_nodes(self.conn, card_id, parent_session, 1, 1)
+
+        uses = self.conn.execute(
+            """
+            SELECT n.native_node_id, COUNT(*) AS uses
+            FROM card_nodes covered
+            JOIN conversation_nodes n ON n.node_id = covered.node_id
+            JOIN cards c ON c.card_id = covered.card_id
+            WHERE c.session_id = ?
+            GROUP BY n.native_node_id
+            ORDER BY n.native_node_id
+            """,
+            (parent_session,),
+        ).fetchall()
+        self.assertEqual(
+            [(row["native_node_id"], row["uses"]) for row in uses],
+            [("left", 2), ("root", 2)],
         )
 
     def test_tree_first_card_policy_is_source_local(self) -> None:

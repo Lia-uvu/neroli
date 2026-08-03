@@ -1,6 +1,6 @@
 # Conversation tree adapter contract
 
-Status: **implemented by schema v12 and the loader; Lia's local instance migrated on 2026-08-03**
+Status: **tree/observation contract implemented in v12; overlapping Card membership restored in v13**
 
 Neroli has two layers:
 
@@ -221,32 +221,40 @@ Card generation is a separate derived layer:
 
 - every new conversational branch is equally eligible material;
 - when a new branch tail arrives, Card Gen may read its ancestor path as context;
-- shared ancestors already covered by cards are context, not newly owned material;
-- only the new, uncovered branch segment is owned by that generation pass;
-- Card coverage/ownership state belongs to this derived layer, not to the tree;
+- shared ancestors do not become new trigger material merely because another
+  branch reuses them, but Card ranges may include that context again;
+- only the new, uncovered branch segment counts toward triggering that processing stream;
+- processing-stream attribution and Card membership belong to this derived layer,
+  not to the tree, and they are not the same relation;
 - path-local rounds may be derived temporarily for model prompting, but they are
   not source-tree facts;
 - cards and indexes remain rebuildable from the tree.
 
-The current v12 compatibility bridge deterministically projects a newly observed
-tree into Card-only branch sessions. The first discovered child continues the
+The v12 tree compatibility bridge, with the v13 Card-membership correction,
+deterministically projects a newly observed tree into Card-only branch sessions.
+The first discovered child continues the
 existing processing stream; later siblings receive peer streams with the shared
 ancestor path marked `turns.is_context=1`. This is arrival-time coverage state,
-not canonical branch rank. `card_nodes` gives every owned message node at most one
-Card; context nodes remain readable without being re-owned.
+not canonical branch rank. `conversation_node_branches` attributes new trigger
+material to one processing stream. Separately, `card_nodes` records inclusive
+Card membership: rolling boundaries and fork context may map one canonical node
+to multiple Cards, matching the pre-tree Card Planner semantics.
 
-“Equal” means the same trigger/context/ownership policy applies to every branch;
-it does not mean independently re-carding every complete root-to-leaf path. This
-preserves the useful part of the current fork-tail behavior—shared context without
-duplicate ownership—without naming one session parent, child, main, or
-continuation.
+“Equal” means the same trigger/context/tail-replacement policy applies to every
+branch. Shared prefixes alone do not retrigger Card Gen, while the existing
+inclusive refeed boundary remains free to describe a boundary message in both the
+parent/frozen Card and the new branch Card. None of this names a session parent,
+child, main, or continuation in the canonical tree.
 
 ## History rendering
 
-`src/history.py::render_history` and `bin/cli.py --render-history` return the full
-node forest plus the latest observation per `(source, native_context_id, kind)`.
+`src/history.py::render_history` and `bin/cli.py --render-history` currently return
+the full node forest plus the latest observation per `(source, native_context_id, kind)`.
 For a cursor, the projection follows parent edges to return its observed path.
 Changing only an observation changes that render path and nothing in Card state.
+This unbounded CLI projection is diagnostic, not the Porch history UI contract;
+a production reader must page a recent context list and lazily load a selected
+path/branch instead of materializing an entire room.
 
 ## Deliberately deferred
 

@@ -1,3 +1,4 @@
+-- schema v13（2026-08-03，恢复 Card inclusive/fork overlap 的 node membership）
 -- schema v12（2026-08-03，source-neutral conversation tree + rendering observations）
 -- schema v11（2026-07-31，canonical adapter identity + explicit local room routing policy）
 -- schema v10（2026-07-31，turns 来源无关变更水位，供白天 Card Gen watcher 轮询）
@@ -23,7 +24,7 @@
 -- 暂未含（待设计）：profile 画像注入层；embedding 向量索引。（constant 篮子已在 v7 落表）
 
 PRAGMA journal_mode = WAL;
-PRAGMA user_version = 12;
+PRAGMA user_version = 13;
 
 CREATE TABLE IF NOT EXISTS pipeline_runs (
   id TEXT PRIMARY KEY,
@@ -244,11 +245,11 @@ CREATE TABLE IF NOT EXISTS cards (
 CREATE INDEX IF NOT EXISTS cards_session_idx ON cards(session_id);
 CREATE INDEX IF NOT EXISTS cards_time_idx    ON cards(timestamp);
 
--- Exact tree-node ownership for Cards. Shared ancestor turns may be readable
--- context in a branch session but a node is owned by at most one card.
+-- Tree-node membership for Cards. Inclusive rolling boundaries and fork context
+-- intentionally allow one canonical node to appear in more than one Card.
 CREATE TABLE IF NOT EXISTS card_nodes (
   card_id  TEXT NOT NULL REFERENCES cards(card_id) ON DELETE CASCADE,
-  node_id  TEXT NOT NULL UNIQUE REFERENCES conversation_nodes(node_id),
+  node_id  TEXT NOT NULL REFERENCES conversation_nodes(node_id),
   position INTEGER NOT NULL,
   PRIMARY KEY(card_id, node_id)
 );

@@ -63,8 +63,10 @@ Ingest 负责让可对话的新树节点最终进入 `messages` / `turns`。
 
 Tree adapter 是输入形状的差异，不是另一套 Card Gen：Ingest 保存
 `conversation_nodes` 后投影出 Card-only branch sessions。`turns.is_context=1` 的共享
-ancestor 可读但不计新物料，`card_nodes` 保证一个 canonical node 最多被一张卡
-拥有。`conversation_observations` 不写 turns，因而 cursor 移动不唤醒、不改写卡。
+ancestor 可读但不计新触发物料；`card_nodes` 记录 inclusive Card membership，所以滚动
+边界和 fork context 可以让一个 canonical node 同时出现在多张卡里。branch 是否仍有
+未处理新物料按生成 Card 的 session 局部判断，不能拿全局 node membership 代替。
+`conversation_observations` 不写 turns，因而 cursor 移动不唤醒、不改写卡。
 
 ## 模型配置
 

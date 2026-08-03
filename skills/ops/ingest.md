@@ -84,6 +84,7 @@ Tree v1 的 observation 只写 `conversation_observations`。验收时记录入�
 - 重复导入不产生新 turn；同 native message ID 改内容会硬失败，真实编辑必须用新 ID。
 - `source_route` 在私有 policy 中有且只有一个 room 映射；删掉映射的测试必须拒绝入库。
 - tree v1 的 `room` 必须在 `ingest.source_rooms[source]` 中；整树应入
-  `conversation_nodes`，分叉后每个可对话节点只有一条 `card_nodes` ownership。
+  `conversation_nodes`。分叉的新增物料只归一个 processing stream 触发，但 inclusive/fork
+  Card 边界允许同一节点出现在多张 `card_nodes` membership 中。
 - 清洗只去掉平台噪声（空消息、附件壳、系统占位等），不改写用户/agent 原话。
 - 导入后抽查 `messages` / `turns` 计数、首尾时间、几条原文内容；再跑一次 ingest，计数不应重复增长。

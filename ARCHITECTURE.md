@@ -88,4 +88,4 @@ python3 -m unittest discover -s tests -v
 
 - **[skills/ops/SKILL.md](skills/ops/SKILL.md)** — 运维 Skill：按模块导航 + 「改哪里」表
 - **[skills/ops/](skills/ops/)** — 各模块运维 Skill：ingest / card-gen / index / context / search / common
-- **[schema.md](schema.md)** — SQLite v12 表结构（conversation tree + observations + Card coverage + 兼容与派生层）
+- **[schema.md](schema.md)** — SQLite v13 表结构（conversation tree + observations + overlapping Card membership + 兼容与派生层）

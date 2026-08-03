@@ -1,8 +1,8 @@
-# recall-pipeline 表结构（schema v12）
+# recall-pipeline 表结构（schema v13）
 
 > 改 db.py 或 schema.sql 时查这个。
 >
-> **版本机制**：`PRAGMA user_version = 12`。connect() 只校验版本不做迁移；
+> **版本机制**：`PRAGMA user_version = 13`。connect() 只校验版本不做迁移；
 > 升级写 `migrations/NNN-*.sql`（手动 `sqlite3 db < 迁移文件`），并同步 schema.sql 和本文档。
 
 ## 原始层（v4：内容与发生分离）
@@ -146,12 +146,17 @@ Card Gen 唤醒入口。
 | room | room 名，如 main / secondary |
 | model | 生成用的模型 |
 
-## card_nodes（tree Card 精确 ownership，v12）
+## card_nodes（tree Card node membership，v13）
 
-`card_id -> node_id` 映射只记录该 Card 真正拥有的 tree message nodes。`node_id`
-全表唯一：共享 ancestor 可以在多个 branch prompt 中当 context，但不能沿每条
-root-to-leaf 路径重复成为 Card ownership。删除可塑尾卡时映射随 FK cascade 删除，
-成功新尾再重建 coverage。
+`card_id -> node_id` 是 Card 与其实际覆盖的 tree message nodes 的多对多映射。
+Card 的 `turn_start / turn_end` 是 inclusive；相邻滚动边界、fork child 重喂 parent tail
+以及共享 ancestor context 都可能让同一个 canonical node 同时出现在多张 Card 中。
+因此唯一键只有 `(card_id, node_id)`，没有全局 `UNIQUE(node_id)`。删除可塑尾卡时该卡的
+membership 随 FK cascade 删除，成功新尾再按实际范围重建。
+
+“这条 node 是否已经作为某个 branch 的新增物料处理过”不能用全局 node membership 判断；
+tree trigger 按生成 Card 的 `session_id` 检查 branch-local coverage。共享 context 不单独触发
+新卡，但可以合法地被新卡再次包含和重新组织。
 
 ## card_tags（标签，entity overlap + 共现的源）
 

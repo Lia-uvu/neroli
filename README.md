@@ -62,7 +62,7 @@ The system is iterated on agent feedback, so the primary users of the memory are
 - [docs/source-adapter-boundary.md](docs/source-adapter-boundary.md) — what source adapters own, what Neroli owns, and the current tree boundary
 - [docs/normalized-adapter-contract.md](docs/normalized-adapter-contract.md) — source adapter contract, canonical identity, ordering, and local room policy
 - [docs/conversation-tree-adapter-contract.md](docs/conversation-tree-adapter-contract.md) — incremental node/parent tree contract with rendering-only observations
-- [schema.md](schema.md) — SQLite schema v12 reference
+- [schema.md](schema.md) — SQLite schema v13 reference
 
 ## FAQ
 **Where does my data go?**

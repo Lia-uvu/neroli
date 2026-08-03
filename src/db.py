@@ -21,7 +21,7 @@ import jieba  # type: ignore
 if hasattr(jieba, "setLogLevel"):  # 工作台的 jieba 兜底 mock 没有这方法
     jieba.setLogLevel(60)  # 静音 "Building prefix dict..."——检索是 agent 在用，噪音会混进每次输出
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 DB = MEMORY / "data" / "fragments.db"
 SCHEMA = MEMORY / "config" / "schema.sql"
@@ -804,8 +804,14 @@ def tree_session_has_uncovered_nodes(
         SELECT 1
         FROM turns t
         JOIN conversation_nodes n ON n.node_id = t.source_uuid
-        LEFT JOIN card_nodes covered ON covered.node_id = n.node_id
-        WHERE t.session_id = ? AND t.is_context = 0 AND covered.node_id IS NULL
+        WHERE t.session_id = ? AND t.is_context = 0
+          AND NOT EXISTS (
+            SELECT 1
+            FROM card_nodes covered
+            JOIN cards covering_card ON covering_card.card_id = covered.card_id
+            WHERE covered.node_id = n.node_id
+              AND covering_card.session_id = t.session_id
+          )
         LIMIT 1
         """,
         (session_id,),
@@ -816,7 +822,11 @@ def attach_card_nodes(
     conn: sqlite3.Connection, card_id: str, session_id: str,
     start_round: int | None, end_round: int | None,
 ) -> None:
-    """Attach only branch-owned tree nodes; readable ancestor context stays unowned."""
+    """Record every tree message included in a Card's inclusive turn range.
+
+    This is Card membership, not global node ownership: rolling boundaries and
+    fork context intentionally allow the same canonical node in multiple Cards.
+    """
     if start_round is None:
         return
     hi = end_round if end_round is not None else start_round
@@ -825,17 +835,15 @@ def attach_card_nodes(
         SELECT t.source_uuid AS node_id
         FROM turns t
         JOIN conversation_nodes n ON n.node_id = t.source_uuid
-        LEFT JOIN card_nodes covered ON covered.node_id = n.node_id
-        WHERE t.session_id = ? AND t.is_context = 0
+        WHERE t.session_id = ?
           AND t.round BETWEEN ? AND ?
-          AND covered.node_id IS NULL
         ORDER BY t.round, t.message_seq, t.line_no
         """,
         (session_id, start_round, hi),
     ).fetchall()
     for position, row in enumerate(rows, start=1):
         conn.execute(
-            "INSERT INTO card_nodes (card_id, node_id, position) VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO card_nodes (card_id, node_id, position) VALUES (?, ?, ?)",
             (card_id, row["node_id"], position),
         )
 
