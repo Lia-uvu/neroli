@@ -64,9 +64,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reroom-cards", action="store_true", help="Re-derive each card's room from its session source file and rebuild context.")
     parser.add_argument("--list-forks", action="store_true", help="List inferred session fork relationships.")
     parser.add_argument("--render-history", action="store_true", help="Print source-neutral conversation trees and latest render observations as JSON.")
-    parser.add_argument("--history-room", default=None, help=f"Room for --render-history ({'/'.join(ROOMS)}).")
+    parser.add_argument("--list-history-contexts", action="store_true", help="Print a bounded page of recent history contexts as JSON.")
+    parser.add_argument("--history-room", default=None, help=f"Optional room filter for history lists; required by --render-history ({'/'.join(ROOMS)}).")
     parser.add_argument("--history-source", default=None, help="Optional adapter source filter for --render-history.")
     parser.add_argument("--history-context", default=None, help="Optional native context/session filter for --render-history.")
+    parser.add_argument("--history-limit", type=int, default=30, help="Page size for --list-history-contexts (1-100).")
+    parser.add_argument("--history-offset", type=int, default=0, help="Page offset for --list-history-contexts.")
     parser.add_argument("--dump-json", type=Path, help="Normalize inputs to JSON, then exit.")
     parser.add_argument("--ingest-only", action="store_true", help="Write input turns to SQLite without running the model.")
     parser.add_argument(
@@ -129,6 +132,17 @@ def run(argv: list[str] | None = None) -> int:
         return 0
 
     conn = connect(args.db)
+
+    if args.list_history_contexts:
+        from history import list_history_contexts
+        print(json.dumps(list_history_contexts(
+            conn,
+            room=args.history_room,
+            source=args.history_source,
+            limit=args.history_limit,
+            offset=args.history_offset,
+        ), ensure_ascii=False, indent=2))
+        return 0
 
     if args.render_history:
         if not args.history_room:

@@ -199,6 +199,190 @@ class ClaudeCodeTreeAdapterTest(unittest.TestCase):
         )
         self.assertNotIn("private", json.dumps(envelope))
 
+    def test_meta_errors_and_tool_results_never_become_portable_messages(self) -> None:
+        path = self.root / "structural.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "user", "uuid": "meta", "parentUuid": None,
+                    "sessionId": "session", "timestamp": "2026-01-01T00:00:00Z",
+                    "isMeta": True,
+                    "message": {
+                        "role": "user",
+                        "content": "Base directory for this skill: private runtime prompt",
+                    },
+                },
+                {
+                    "type": "assistant", "uuid": "error", "parentUuid": "meta",
+                    "sessionId": "session", "timestamp": "2026-01-01T00:00:01Z",
+                    "isApiErrorMessage": True,
+                    "error": "provider failure",
+                    "message": {"role": "assistant", "content": "retry notice"},
+                },
+                {
+                    "type": "user", "uuid": "tool", "parentUuid": "error",
+                    "sessionId": "session", "timestamp": "2026-01-01T00:00:02Z",
+                    "toolUseResult": {"stdout": "private output"},
+                    "message": {"role": "user", "content": "tool result wrapper"},
+                },
+                {
+                    "type": "user", "uuid": "user", "parentUuid": "tool",
+                    "sessionId": "session", "timestamp": "2026-01-01T00:00:03Z",
+                    "message": {"role": "user", "content": "actual question"},
+                },
+            ],
+        )
+
+        envelope = export_claude_code_tree([path], room="den")
+        by_id = {node["native_node_id"]: node for node in envelope["nodes"]}
+        self.assertEqual(by_id["meta"]["kind"], "event")
+        self.assertEqual(by_id["error"]["kind"], "event")
+        self.assertEqual(by_id["tool"]["kind"], "tool")
+        for node_id in ("meta", "error", "tool"):
+            self.assertNotIn("message", by_id[node_id])
+        self.assertEqual(by_id["user"]["kind"], "message")
+        self.assertEqual(
+            by_id["user"]["message"]["content"],
+            [{"type": "text", "text": "actual question"}],
+        )
+        self.assertNotIn("private runtime prompt", json.dumps(envelope))
+        self.assertNotIn("private output", json.dumps(envelope))
+
+    def test_successful_api_retry_is_a_linear_conversation_not_a_fork(self) -> None:
+        path = self.root / "retry.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "user", "uuid": "question", "parentUuid": None,
+                    "sessionId": "session", "timestamp": "2026-01-01T00:00:00Z",
+                    "message": {"role": "user", "content": "question"},
+                },
+                {
+                    "type": "system", "subtype": "api_error", "uuid": "error",
+                    "parentUuid": "question", "sessionId": "session",
+                    "timestamp": "2026-01-01T00:00:01Z", "retryAttempt": 1,
+                },
+                {
+                    "type": "assistant", "uuid": "answer", "parentUuid": "question",
+                    "sessionId": "session", "timestamp": "2026-01-01T00:00:02Z",
+                    "message": {"role": "assistant", "content": "answer"},
+                },
+                {
+                    "type": "system", "subtype": "stop_hook_summary", "uuid": "hook",
+                    "parentUuid": "error", "sessionId": "session",
+                    "timestamp": "2026-01-01T00:00:03Z",
+                },
+                {
+                    "type": "user", "uuid": "follow-up", "parentUuid": "hook",
+                    "sessionId": "session", "timestamp": "2026-01-01T00:00:04Z",
+                    "message": {"role": "user", "content": "follow-up"},
+                },
+            ],
+        )
+
+        envelope = export_claude_code_tree([path], room="den")
+        parents = {
+            node["native_node_id"]: node["native_parent_node_id"]
+            for node in envelope["nodes"]
+        }
+        self.assertEqual(
+            parents,
+            {
+                "question": None,
+                "error": "question",
+                "answer": "error",
+                "hook": "answer",
+                "follow-up": "hook",
+            },
+        )
+
+    def test_successful_retry_without_stop_hook_still_follows_the_error(self) -> None:
+        path = self.root / "retry-at-end.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "user", "uuid": "question", "parentUuid": None,
+                    "sessionId": "session", "timestamp": "2026-01-01T00:00:00Z",
+                    "message": {"role": "user", "content": "question"},
+                },
+                {
+                    "type": "system", "subtype": "api_error", "uuid": "error",
+                    "parentUuid": "question", "sessionId": "session",
+                    "timestamp": "2026-01-01T00:00:01Z",
+                },
+                {
+                    "type": "assistant", "uuid": "answer", "parentUuid": "question",
+                    "sessionId": "session", "timestamp": "2026-01-01T00:00:02Z",
+                    "message": {"role": "assistant", "content": "answer"},
+                },
+            ],
+        )
+
+        envelope = export_claude_code_tree([path], room="den")
+        by_id = {node["native_node_id"]: node for node in envelope["nodes"]}
+        self.assertEqual(by_id["answer"]["native_parent_node_id"], "error")
+
+    def test_compact_boundary_uses_explicit_logical_parent(self) -> None:
+        path = self.root / "compact.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "assistant", "uuid": "old-leaf", "parentUuid": None,
+                    "sessionId": "session", "timestamp": "2026-01-01T00:00:00Z",
+                    "message": {"role": "assistant", "content": "old answer"},
+                },
+                {
+                    "type": "system", "subtype": "compact_boundary",
+                    "uuid": "boundary", "parentUuid": None,
+                    "logicalParentUuid": "old-leaf", "sessionId": "session",
+                    "timestamp": "2026-01-01T00:00:02Z",
+                },
+                {
+                    "type": "user", "uuid": "summary", "parentUuid": "boundary",
+                    "sessionId": "session", "timestamp": "2026-01-01T00:00:01Z",
+                    "isCompactSummary": True, "isVisibleInTranscriptOnly": True,
+                    "message": {"role": "user", "content": "runtime summary"},
+                },
+            ],
+        )
+
+        envelope = export_claude_code_tree([path], room="den")
+        by_id = {node["native_node_id"]: node for node in envelope["nodes"]}
+        self.assertEqual(by_id["boundary"]["native_parent_node_id"], "old-leaf")
+        self.assertEqual(by_id["summary"]["native_parent_node_id"], "boundary")
+
+    def test_real_user_continuation_sibling_is_not_flattened(self) -> None:
+        path = self.root / "real-branch.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "user", "uuid": "question", "parentUuid": None,
+                    "sessionId": "session", "timestamp": "2026-01-01T00:00:00Z",
+                    "message": {"role": "user", "content": "question"},
+                },
+                {
+                    "type": "assistant", "uuid": "answer", "parentUuid": "question",
+                    "sessionId": "session", "timestamp": "2026-01-01T00:00:01Z",
+                    "message": {"role": "assistant", "content": "answer"},
+                },
+                {
+                    "type": "user", "uuid": "alternate", "parentUuid": "question",
+                    "sessionId": "session", "timestamp": "2026-01-01T00:00:02Z",
+                    "message": {"role": "user", "content": "alternate continuation"},
+                },
+            ],
+        )
+
+        envelope = export_claude_code_tree([path], room="den")
+        by_id = {node["native_node_id"]: node for node in envelope["nodes"]}
+        self.assertEqual(by_id["answer"]["native_parent_node_id"], "question")
+        self.assertEqual(by_id["alternate"]["native_parent_node_id"], "question")
+
 
 if __name__ == "__main__":
     unittest.main()

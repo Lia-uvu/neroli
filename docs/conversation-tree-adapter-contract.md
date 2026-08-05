@@ -26,7 +26,7 @@ tree-aware adapters use this incremental contract.
 |---|---|---|---|
 | Container | One header plus append-only entries in a JSONL session file | Repeated JSONL records carrying `sessionId`; one logical session may span files | Adapter-private provenance; conversation components are defined by roots and parent edges |
 | Node identity | Stable entry `id` | Top-level `uuid`, reused by copied/replayed history | Stable `native_node_id`, namespaced by source and room |
-| Parent edge | Entry `parentId` | Top-level `parentUuid`; compaction may also expose `logicalParentUuid` | One optional `native_parent_node_id` per normalized node |
+| Parent edge | Entry `parentId` | Top-level `parentUuid`; API retries and compaction also expose explicit lifecycle structure | One optional normalized `native_parent_node_id` per node |
 | Branches | Sibling entries coexist in one file; fork/clone may create another file | Shared UUIDs, copied prefixes, replay, and sidechains | Sibling nodes remain siblings; copied native IDs deduplicate shared nodes |
 | Append order | JSONL entry order | JSONL line order, including replayed records | Not canonical; parent edges define structure and time/node ID sort siblings for display |
 | Non-chat nodes | Tool results, model/thinking changes, compaction, branch summaries, custom entries | Tool use/result, thinking, attachments, system/meta, compact summaries, queue/UI metadata | Preserve structural skeletons only when needed to keep parent chains connected |
@@ -34,15 +34,19 @@ tree-aware adapters use this incremental contract.
 | Room | Porch knows the selected room profile | Adapter knows its explicitly enrolled project/room | Adapter submits `room`; Neroli validates but does not remap it |
 
 Full-corpus structural inspection deliberately did not print conversation bodies.
-Across 624 JSONL files, 77,966 valid rows contained 45,381 distinct UUID-bearing
+Across 625 JSONL files, 77,976 valid rows contained 45,391 distinct UUID-bearing
 nodes. There were 7,073 replayed UUID groups (10,541 duplicate occurrences),
 including 6,306 groups crossing session containers. Portable content, timestamp,
 role, and provider/model facts did not conflict. One UUID had a parent variant:
 the later replay placed an existing node below a compaction summary while the
-original non-compaction parent remained stable. Therefore a source session is
+original non-compaction parent remained stable. The same audit found 28 successful
+API-retry episodes whose error and reply were recorded as raw siblings, 24 retry
+stop hooks still attached to the error, and 11 compact boundaries carrying an
+authoritative `logicalParentUuid`. These 63 explicit lifecycle edges normalize
+without reading message bodies. Therefore a source session is
 useful adapter provenance but not canonical node ownership. Resolving replay and
-compaction bookkeeping into stable normalized nodes is Claude-adapter work, not
-a reason to make Neroli interpret Claude lifecycle semantics.
+retry/compaction bookkeeping into stable normalized nodes is Claude-adapter work,
+not a reason to make Neroli interpret Claude lifecycle semantics.
 
 ## Envelope
 
@@ -187,15 +191,19 @@ it requires no Pi source modification or fork.
 
 ### Claude Code mapping
 
-- Top-level `uuid` / normalized `parentUuid` -> node / parent identity.
+- Top-level `uuid` / source-normalized parent facts -> node / parent identity.
 - Replayed UUIDs with identical payload are emitted once.
 - `sessionId` and JSONL file membership remain adapter provenance. A copied UUID
   is not duplicated merely because it was observed in another session container.
-- The adapter resolves later replay/compaction parent bookkeeping into one stable
-  source tree before submission. It does not send UI lifecycle interpretations.
+- The adapter resolves replay and explicit runtime bookkeeping into one stable
+  source tree before submission. A successful retry is ordered
+  `request -> api_error -> assistant -> stop_hook`; a `compact_boundary` uses its
+  `logicalParentUuid`. This is source metadata normalization, not inference from
+  content, append order, or a UI-selected branch.
 - User/assistant text -> `message`; tool use/result -> `tool`; compact summaries
-  -> `checkpoint`; attachments and system/meta rows -> structural `event` only
-  when needed to keep a parent chain connected.
+  -> `checkpoint`; attachments, system/meta rows, and API-error/UI-only rows ->
+  structural `event` only when needed to keep a parent chain connected. A native
+  `message.role=user` does not override these top-level runtime facts.
 - `last-prompt.leafUuid`, when the adapter can pair it with an authoritative
   context and observation time, may be submitted as a `cursor` observation. It
   never privileges that branch for Card generation.
@@ -203,10 +211,13 @@ it requires no Pi source modification or fork.
 
 `src/claude_code_adapter.py` implements this mapping. It emits each UUID once,
 hard-fails changed portable content or genuinely ambiguous non-compaction parents,
-and chooses the sole stable non-compaction parent for the observed compaction
-replay case. It retains ordinary text block boundaries and block-internal
+chooses the sole stable non-compaction parent for replay, and hard-fails conflicting
+lifecycle normalizations. The provider-free corpus audit verifies all 63 current
+retry/compaction edge corrections as well as portable message equality. It retains
+ordinary text block boundaries and block-internal
 whitespace plus structural tool/checkpoint/event
-skeletons; thinking, raw tool payloads, credentials, attachments, and last-prompt
+skeletons; thinking, raw tool payloads, credentials, attachments, meta/error
+injections, and last-prompt
 text remain only in the original adapter-owned JSONL. Explicit Claude runtime
 injections embedded in user text keep the legacy filter rather than becoming
 portable user content.
@@ -269,13 +280,25 @@ child, main, or continuation in the canonical tree.
 
 ## History rendering
 
-`src/history.py::render_history` and `bin/cli.py --render-history` currently return
-the full node forest plus the latest observation per `(source, native_context_id, kind)`.
-For a cursor, the projection follows parent edges to return its observed path.
-Changing only an observation changes that render path and nothing in Card state.
-This unbounded CLI projection is diagnostic, not the Porch history UI contract;
-a production reader must page a recent context list and lazily load a selected
-path/branch instead of materializing an entire room.
+`src/history.py::list_history_contexts` and `bin/cli.py --list-history-contexts`
+return a bounded, recency-ordered page of the latest cursor per
+`(room, source, native context)`. Room and source are optional list filters; when
+room is omitted, every item still carries its canonical room so a unified local
+client can keep selection room-bound.
+The limit is constrained to 1–100, offset is explicit, and the response carries
+`has_more`, a first-user-message preview, and observed path length without
+returning message bodies for the whole database.
+
+`render_history` still requires an explicit room. With `native_context_id` it follows that context's latest
+observation to its root, then returns only the complete connected component for
+that root. It intentionally includes sibling branches so a renderer can change
+paths locally; it does not materialize unrelated roots. The cursor projection
+follows parent edges to return its observed path. Changing only an observation
+changes that render path and nothing in Card state.
+
+Calling `--render-history` without `--history-context` still returns the full room
+forest as an unbounded diagnostic projection. It is not the Porch history UI
+contract.
 
 ## Deliberately deferred
 

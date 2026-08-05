@@ -15,7 +15,7 @@ import db  # noqa: E402
 import loaders  # noqa: E402
 import pipeline  # noqa: E402
 from gen_cards import update_session_cards  # noqa: E402
-from history import render_history  # noqa: E402
+from history import list_history_contexts, render_history  # noqa: E402
 
 
 class StubModel:
@@ -87,7 +87,11 @@ class ConversationTreeContractTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def load(self, payload: dict):
-        with mock.patch.object(loaders, "validate_source_room", return_value="den"):
+        with mock.patch.object(
+            loaders,
+            "validate_source_room",
+            side_effect=lambda _source, room: room,
+        ):
             return loaders.load_conversation_tree(payload, self.root / "tree.json")
 
     def revision(self) -> int:
@@ -370,6 +374,81 @@ class ConversationTreeContractTest(unittest.TestCase):
         self.assertEqual(
             rendered["observations"][0]["observed_at"],
             "2026-08-03T12:00:00.500000Z",
+        )
+
+    def test_history_context_list_is_bounded_and_selected_render_is_lazy(self) -> None:
+        db.ingest_conversation_tree(self.conn, self.load(envelope()))
+        other = envelope(cursor="left", observed_at="2026-08-03T13:00:00Z")
+        other["nodes"] = [
+            {
+                **node,
+                "native_node_id": f"other-{node['native_node_id']}",
+                "native_parent_node_id": (
+                    f"other-{node['native_parent_node_id']}"
+                    if node["native_parent_node_id"] else None
+                ),
+                "message": {
+                    **node["message"],
+                    "content": [{"type": "text", "text": "other question"}],
+                } if node.get("message") else None,
+            }
+            for node in other["nodes"]
+        ]
+        other["observations"][0]["native_context_id"] = "other-session"
+        other["observations"][0]["native_node_id"] = "other-left"
+        db.ingest_conversation_tree(self.conn, self.load(other))
+
+        same_native_context_in_another_room = envelope(
+            observed_at="2026-08-03T14:00:00Z"
+        )
+        same_native_context_in_another_room["room"] = "loft"
+        db.ingest_conversation_tree(
+            self.conn,
+            self.load(same_native_context_in_another_room),
+        )
+
+        first_page = list_history_contexts(
+            self.conn, room="den", source="fake-tree", limit=1
+        )
+        self.assertEqual(first_page["format"], "neroli-history-context-list-v1")
+        self.assertTrue(first_page["has_more"])
+        self.assertEqual(
+            first_page["contexts"][0]["native_context_id"], "other-session"
+        )
+        self.assertEqual(first_page["contexts"][0]["preview"], "other question")
+        second_page = list_history_contexts(
+            self.conn, room="den", source="fake-tree", limit=1, offset=1
+        )
+        self.assertEqual(
+            second_page["contexts"][0]["native_context_id"], "runtime-session"
+        )
+
+        unified_page = list_history_contexts(
+            self.conn, source="fake-tree", limit=30
+        )
+        self.assertIsNone(unified_page["room"])
+        self.assertEqual(
+            [
+                (item["room"], item["native_context_id"])
+                for item in unified_page["contexts"]
+            ],
+            [
+                ("loft", "runtime-session"),
+                ("den", "other-session"),
+                ("den", "runtime-session"),
+            ],
+        )
+
+        selected = render_history(
+            self.conn,
+            room="den",
+            source="fake-tree",
+            native_context_id="runtime-session",
+        )
+        self.assertEqual(len(selected["nodes"]), 3)
+        self.assertEqual(
+            {node["native_node_id"] for node in selected["nodes"]},
+            {"root", "left", "right"},
         )
 
 

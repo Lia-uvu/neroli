@@ -9,7 +9,18 @@
 # 只写入 turns，不跑模型
 bin/cli.py --ingest-only input.jsonl
 
-# 读取某房间的原文树 + 最新 cursor 渲染投影（不写库）
+# 跨 room/source 分页列最近 context（不写库；limit 1–100，默认 30）
+bin/cli.py --list-history-contexts --history-limit 30 --history-offset 0
+
+# 诊断时可用 room/source 缩窄同一列表
+bin/cli.py --list-history-contexts --history-room ROOM --history-source porch \
+  --history-limit 30 --history-offset 0
+
+# 只读选中 context 所在的完整 component + sibling branches + 最新 cursor path
+bin/cli.py --render-history --history-room ROOM --history-source porch \
+  --history-context NATIVE_CONTEXT_ID
+
+# 不带 --history-context 会返回整间 room，只保留给人工诊断，不是 GUI 入口
 bin/cli.py --render-history --history-room ROOM --history-source porch
 
 # 全量重读（round 跨文件一次算；--max-messages 0 = 不截断）
@@ -21,6 +32,20 @@ python3 scripts/audit_claude_tree_adapter.py
 # 只把 Claude Code tree/observations 幂等回填到指定库；默认不生成 Card turns、不跑模型
 python3 scripts/ingest_claude_tree.py --dry-run
 python3 scripts/ingest_claude_tree.py --db data/fragments.db
+
+# 只修复旧 tree adapter 曾误标为 message 的 Claude meta/API-error 节点；
+# 默认先 dry-run，确认候选没有任何 Card projection 后再显式应用并幂等回填
+python3 scripts/ingest_claude_tree.py --db data/fragments.db \
+  --repair-portable-noise --dry-run
+python3 scripts/ingest_claude_tree.py --db data/fragments.db \
+  --repair-portable-noise
+
+# 只修复旧 adapter 直接照搬 runtime retry/compaction parent 所留下的错误边；
+# 同样先 dry-run，且只允许 history-only、零 Card projection 的 Claude tree
+python3 scripts/ingest_claude_tree.py --db data/fragments.db \
+  --repair-history-structure --dry-run
+python3 scripts/ingest_claude_tree.py --db data/fragments.db \
+  --repair-history-structure
 
 # 只导入 Claude.ai 下载包里的 conversations.json（不碰 projects/users/memories）
 python3 scripts/ingest_claude_ai_exports.py --dry-run
@@ -82,9 +107,17 @@ Tree v1 的 observation 只写 `conversation_observations`。验收时记录入�
 `change_watermarks.turns`：只改 cursor/observation 时 revision 必须不变；`--render-history`
 的 observed path 应更新。
 
+GUI/history reader 应先调用 bounded context list；统一列表可以不传 room，但每项必须保留返回的
+room/source/context，再把三者明确传给 selected render。选中读取必须包含同一 root 下 sibling
+branches，但不得带入其他 root；
+contract test 用两个独立 context 检查分页、`has_more` 与 component 隔离。不要把不带 context 的
+full-room diagnostic render 接成产品列表。
+
 迁移期的 history-only ingest 还必须同时核对 `model_calls`、legacy message/turn/Card 计数和
 watermark 均不变。`scripts/audit_claude_tree_adapter.py` 会在隔离库两次导入全部已配置
-Claude corpus，并对照旧 loader 的 portable message role/text；它不输出正文，也不调用模型。
+Claude corpus，并双向对照旧 loader 的 portable message identity/role/text；tree 多出或漏掉
+message 都会失败；同时逐条核对 API retry 与 compact boundary 的 source-authoritative parent
+normalization。它不输出正文，也不调用模型。
 生产回填前先停两个 watcher 并备份数据库，回填后重复运行一次确认幂等，再按 common.md 起回。
 
 ## 新来源 / 清洗脚本

@@ -41,6 +41,12 @@ nightly 是独立的冷 session 补漏、index、last24、curator 流程，不�
 本机 Claude Code 迁移暂时是有边界的双写：`src/claude_code_adapter.py` 把完整原始
 JSONL 归一成 canonical tree + cursor observations，供 History/未来 GUI 使用；同一批
 JSONL 仍由既有 loader 单独投影到 `messages` / `turns`，继续作为现有 Card 的唯一输入。
+tree adapter 以顶层 meta/tool/error/source-type 事实优先于嵌套的 `message.role`，因此 runtime
+注入即使使用 user-shaped text 也只保留 structural skeleton；全 corpus audit 双向核对它与
+legacy Card loader 的 portable message 集合、role 和 text。Claude 的 `parentUuid` 仍是基础
+边，但不是未经翻译的对话语义：adapter 会把 source 明确记录的成功 API retry 从 sibling
+attempt journal 还原为线性链，并用 compact boundary 的 `logicalParentUuid` 续回原 component；
+这些 normalization 由 corpus audit 逐边验证，不由 Neroli 或 GUI 猜测。
 `ingest.tree_card_projection_sources` 只用于这种同一 journal 已有兼容 Card 投影的迁移期，
 避免树桥再次生成一套 turns；普通 tree source（当前 Porch）仍直接投影 Card material。
 移除 Claude 旧 loader 前，必须另做 Card/turn identity 对齐与迁移，不能只把开关翻过来。
@@ -53,6 +59,14 @@ canonical ID 与 round。adapter 的 `source_route` 只描述入口，本机私�
 `ingest.source_routes` policy 才能把它绑定到 room；未知 route 拒绝入库，不回退默认房间。
 adapter 与 Neroli 各自负责什么、当前 parent-linked tree 能表达什么、哪些 deletion
 语义仍未实现，见 [`source adapter boundary`](docs/source-adapter-boundary.md)。
+
+History 有两种显式读取形状。`list_history_contexts` 只从每个 `(room, source, context)` 的
+最新 cursor observation 生成最近列表，`limit` 强制为 1–100 并支持 offset；room/source 都是
+可选筛选，因此统一 GUI 可取跨 room/source 的有界 catalog，而每项仍返回 canonical room。
+`render_history` 带
+`native_context_id` 时先沿 cursor 找到 root，再只加载该 root 的完整 connected component，
+让 GUI 能看到 sibling branches 而不物化整间 room。不带 context 的 full-room render 仍保留为
+人工诊断入口，不是产品列表 API。两条读取都不写数据库、不跑模型。
 
 ### 边界规则
 
