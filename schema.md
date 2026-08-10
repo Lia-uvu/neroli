@@ -1,4 +1,4 @@
-# recall-pipeline 表结构（schema v13）
+# Neroli 表结构（schema v15）
 
 > 改 db.py 或 schema.sql 时查这个。
 >
@@ -145,6 +145,7 @@ Card Gen 唤醒入口。
 | timestamp | 原始对话发生时间 |
 | room | room 名，如 main / secondary |
 | model | 生成用的模型 |
+| source | adapter/source namespace（如 `porch` / `phone` / `claude-code`）；不是 speaker、模型或 room。v14 起持久化，v15 将项目目录中的 `phone-*.jsonl` 从 Claude Code 正常会话中分离。 |
 
 ## card_nodes（tree Card node membership，v13）
 

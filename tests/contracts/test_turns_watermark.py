@@ -224,6 +224,25 @@ class TurnsWatermarkTest(unittest.TestCase):
                              for row in card_node_indexes))
         self.assertEqual(conn.execute("PRAGMA quick_check").fetchone()[0], "ok")
         self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+
+        migration = (
+            ROOT / "migrations" / "014-card-source-provenance.sql"
+        ).read_text(encoding="utf-8")
+        conn.executescript(migration)
+        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 14)
+        self.assertIn(
+            "source", [row[1] for row in conn.execute("PRAGMA table_info(cards)")]
+        )
+        self.assertEqual(conn.execute("PRAGMA quick_check").fetchone()[0], "ok")
+        self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+
+        migration = (
+            ROOT / "migrations" / "015-phone-source-provenance.sql"
+        ).read_text(encoding="utf-8")
+        conn.executescript(migration)
+        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 15)
+        self.assertEqual(conn.execute("PRAGMA quick_check").fetchone()[0], "ok")
+        self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
         conn.close()
 
 

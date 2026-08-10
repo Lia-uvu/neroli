@@ -37,7 +37,7 @@ There is no setup wizard. You hand [`skills/install/SKILL.md`](skills/install/SK
 ```txt
 agents-yard/
 ├── bedrock/
-│   └── recall-pipeline/        shared memory engine + data
+│   └── neroli/                 shared memory engine + data
 │
 ├── den/                        Room A — Claude Opus
 │   ├── cards-last-24.md
@@ -68,7 +68,7 @@ The system is iterated on agent feedback, so the primary users of the memory are
 - [docs/normalized-adapter-contract.md](docs/normalized-adapter-contract.md) — source adapter contract, canonical identity, ordering, and local room policy
 - [docs/conversation-tree-adapter-contract.md](docs/conversation-tree-adapter-contract.md) — incremental node/parent tree contract with rendering-only observations
 - [skills/ops/search.md](skills/ops/search.md) — retrieval CLI and the read-only MCP surface
-- [schema.md](schema.md) — SQLite schema v13 reference
+- [schema.md](schema.md) — SQLite schema v15 reference
 
 ## FAQ
 **Where does my data go?**

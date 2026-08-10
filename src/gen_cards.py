@@ -25,6 +25,7 @@ from db import (
     is_tree_card_session,
     load_turns_from_round,
     record_model_call,
+    source_for_session,
     tree_session_has_uncovered_nodes,
 )
 from memory_types import Message
@@ -329,6 +330,7 @@ def _rewrite_session_tail(
         c["card_id"] = f"{session_id[:8]}#{plan.owned_prefix_count + i + 1}"
         c["room"] = room
         c["model"] = model.name
+        c["source"] = source_for_session(conn, session_id)
         insert_card(conn, c, label="pipeline", source_file="")
         attach_card_nodes(
             conn,

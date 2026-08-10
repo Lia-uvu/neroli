@@ -119,6 +119,15 @@ class CardGenFailureSafetyTest(unittest.TestCase):
 
     def test_auto_cards_propagates_session_failures(self):
         db.ingest_turns(self.conn, _messages(self.sid, 1, 5))
+        self.conn.execute(
+            """
+            INSERT INTO source_sessions
+            (session_id, source, native_session_id, source_route, room)
+            VALUES (?, 'claude-code', ?, 'den', 'den')
+            """,
+            (self.sid, self.sid),
+        )
+        self.conn.commit()
         model = FakeModel([RuntimeError("provider failed after accepting request")])
 
         with redirect_stdout(StringIO()), \

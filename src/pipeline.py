@@ -6,7 +6,7 @@ import sqlite3
 
 from config import DEFAULT_ROOM, ROOMS, load_settings
 from context import rebuild_context
-from db import get_session_cards, room_for_session
+from db import get_session_cards, room_for_session, source_for_session
 from gen_cards import process_session_cards, update_session_cards
 from model import ModelRunner
 
@@ -104,20 +104,41 @@ def reroom_cards(conn: sqlite3.Connection) -> dict:
     return {"cards_rerooted": changed, "by_target": moves}
 
 
-def check_card_gen_threshold(conn: sqlite3.Connection) -> tuple[bool, str]:
-    """检查是否满足出卡条件：新轮数 >= min 且距上次出卡 >= min 分钟。"""
-    s = load_settings().get("card_gen", {})
+def _card_policy(source: str) -> dict:
+    """Merge global Card Gen defaults with one source's local policy."""
+    base = dict(load_settings().get("card_gen", {}))
+    policies = base.pop("source_policies", {})
+    override = policies.get(source, {}) if isinstance(policies, dict) else {}
+    if isinstance(override, dict):
+        base.update(override)
+    return base
+
+
+def check_card_gen_threshold(
+    conn: sqlite3.Connection, source: str | None = None
+) -> tuple[bool, str]:
+    """Check new-round and cooldown gates globally or for one adapter source."""
+    s = _card_policy(source) if source else load_settings().get("card_gen", {})
+    if source and not s.get("enabled", True):
+        return False, f"source {source} disabled"
     min_rounds = s.get("min_new_turns", 5)
     min_minutes = s.get("min_interval_minutes", 60)
 
-    attempt_row = conn.execute(
+    attempt_rows = conn.execute(
         """
-        SELECT MAX(created_at) AS last_attempt FROM model_calls
+        SELECT session_id, created_at FROM model_calls
         WHERE step IN ('gen_cards', 'gen_cards_update',
                        'gen_cards_attempt', 'gen_cards_attempt_error')
         """
-    ).fetchone()
-    last_attempt = attempt_row["last_attempt"] if attempt_row and attempt_row["last_attempt"] else None
+    ).fetchall()
+    if source:
+        attempt_rows = [
+            row for row in attempt_rows
+            if row["session_id"] and source_for_session(conn, row["session_id"]) == source
+        ]
+    last_attempt = max(
+        (row["created_at"] for row in attempt_rows if row["created_at"]), default=None
+    )
     elapsed = float("inf")
 
     if last_attempt:
@@ -133,36 +154,34 @@ def check_card_gen_threshold(conn: sqlite3.Connection) -> tuple[bool, str]:
             if elapsed < min_minutes:
                 return False, f"too soon ({elapsed:.0f}min < {min_minutes}min)"
 
-    success_row = conn.execute(
+    success_rows = conn.execute(
         """
-        SELECT MAX(created_at) AS last_success FROM model_calls
+        SELECT session_id, created_at FROM model_calls
         WHERE step IN ('gen_cards', 'gen_cards_update')
         """
-    ).fetchone()
-    last_success = success_row["last_success"] if success_row and success_row["last_success"] else None
-    if last_success:
-        new_count = conn.execute(
-            """
-            SELECT COUNT(*) AS n
-            FROM (
-              SELECT DISTINCT session_id, round
-              FROM turns
-              WHERE created_at > ? AND is_context = 0
-            )
-            """,
-            (last_success,),
-        ).fetchone()["n"]
-    else:
-        new_count = conn.execute(
-            """
-            SELECT COUNT(*) AS n
-            FROM (
-              SELECT DISTINCT session_id, round
-              FROM turns
-              WHERE is_context = 0
-            )
-            """
-        ).fetchone()["n"]
+    ).fetchall()
+    if source:
+        success_rows = [
+            row for row in success_rows
+            if row["session_id"] and source_for_session(conn, row["session_id"]) == source
+        ]
+    last_success = max(
+        (row["created_at"] for row in success_rows if row["created_at"]), default=None
+    )
+    turn_rows = conn.execute(
+        """
+        SELECT DISTINCT session_id, round, created_at
+        FROM turns WHERE is_context = 0
+          AND (? IS NULL OR created_at > ?)
+        """,
+        (last_success, last_success),
+    ).fetchall()
+    if source:
+        turn_rows = [
+            row for row in turn_rows
+            if source_for_session(conn, row["session_id"]) == source
+        ]
+    new_count = len({(row["session_id"], row["round"]) for row in turn_rows})
 
     if new_count < min_rounds:
         return False, f"only {new_count} new rounds (need {min_rounds})"
@@ -174,6 +193,13 @@ def sessions_needing_update(conn: sqlite3.Connection) -> list[tuple[str, str]]:
     """找出有新 turns 超过最后一张卡的 session。按最近活跃排序，返回 [(session_id, room), ...]"""
     s = load_settings().get("card_gen", {})
     min_first_session_turns = s.get("min_first_session_turns", 3)
+    policies = s.get("source_policies", {})
+    policy_minima = [
+        policy.get("min_first_session_turns", min_first_session_turns)
+        for policy in policies.values()
+        if isinstance(policy, dict) and policy.get("enabled", True)
+    ] if isinstance(policies, dict) else []
+    query_min_first = min([min_first_session_turns, *policy_minima])
     raw_exempt_globs = s.get("min_first_session_turns_exempt_source_globs", [])
     if isinstance(raw_exempt_globs, str):
         raw_exempt_globs = [raw_exempt_globs]
@@ -266,9 +292,21 @@ def sessions_needing_update(conn: sqlite3.Connection) -> list[tuple[str, str]]:
             )
           )
         ORDER BY last_activity DESC
-    """, (min_first_session_turns, *exempt_globs)).fetchall()
+    """, (query_min_first, *exempt_globs)).fetchall()
     ranked_results: list[tuple[str, str, str]] = []
     for r in rows:
+        source = source_for_session(conn, r["session_id"])
+        policy = _card_policy(source)
+        if not policy.get("enabled", True):
+            continue
+        if (r["card_count"] == 0
+                and r["effective_round_count"] < policy.get(
+                    "min_first_session_turns", min_first_session_turns)
+                and not any(conn.execute(
+                    "SELECT 1 FROM turns WHERE session_id=? AND source_file GLOB ? LIMIT 1",
+                    (r["session_id"], pattern),
+                ).fetchone() for pattern in exempt_globs)):
+            continue
         # v2 adapter 的本机 policy 结果优先；legacy 才从 source_file/project_dir 派生。
         # 能派生就用它——
         # 这样早期误判成默认房间的其他房间 session 会在下次出卡时自愈。只有来源落在房间外
@@ -302,9 +340,13 @@ def sessions_needing_update(conn: sqlite3.Connection) -> list[tuple[str, str]]:
         """
     ).fetchall()
     for row in tree_rows:
+        policy = _card_policy(row["source"])
+        if not policy.get("enabled", True):
+            continue
         if (
             row["card_count"] > 0
-            or row["owned_rounds"] >= min_first_session_turns
+            or row["owned_rounds"] >= policy.get(
+                "min_first_session_turns", min_first_session_turns)
             or row["source"] in exempt_sources
         ):
             ranked_results.append(
@@ -321,10 +363,6 @@ def auto_generate_cards(
     model: ModelRunner,
 ) -> int:
     """双阈值触发：检查条件 → 找需要更新的 session → 增量出卡 → 刷 last-24。返回处理的 session 数。"""
-    ok, reason = check_card_gen_threshold(conn)
-    if not ok:
-        return 0
-
     s = load_settings().get("card_gen", {})
     max_per_trigger = s.get("max_sessions_per_trigger", 3)
 
@@ -332,7 +370,17 @@ def auto_generate_cards(
     if not targets:
         return 0
 
-    targets = targets[:max_per_trigger]
+    eligible_targets: list[tuple[str, str]] = []
+    checked_sources: dict[str, bool] = {}
+    for session_id, room in targets:
+        source = source_for_session(conn, session_id)
+        if source not in checked_sources:
+            checked_sources[source] = check_card_gen_threshold(conn, source)[0]
+        if checked_sources[source]:
+            eligible_targets.append((session_id, room))
+    targets = eligible_targets[:max_per_trigger]
+    if not targets:
+        return 0
 
     count = 0
     failures: list[tuple[str, Exception]] = []

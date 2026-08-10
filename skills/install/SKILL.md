@@ -1,6 +1,6 @@
 ---
 name: neroli-install
-description: Agent-native installer for the Neroli memory engine. You (the user's coding agent) work through the stage files one at a time, fill in everything you already know about your user, ask only what you cannot know, and verify every checkpoint before moving on.
+description: Install or integrate a new Neroli memory-engine instance. Use for preflight, user/privacy configuration, secrets, first ingest, model and embedding setup, scheduling, session-start memory injection, or uninstalling an installation. Work through the stage files one at a time, fill defensible facts before asking questions, and verify every checkpoint before continuing.
 ---
 
 # Neroli INSTALL — instructions for the installing agent

@@ -98,9 +98,10 @@ class CardBehaviorCompatibilityTest(unittest.TestCase):
         self.assertEqual(
             (
                 card["headline"], card["share"], card["private"],
-                card["timestamp"], card["room"], card["model"],
+                card["timestamp"], card["room"], card["model"], card["source"],
             ),
-            ("event", "shared fact", "room fact", TIMESTAMP, "den", model.name),
+            ("event", "shared fact", "room fact", TIMESTAMP, "den", model.name,
+             "legacy"),
         )
         self.assertEqual(
             [row["tag"] for row in self.conn.execute(

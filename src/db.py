@@ -21,7 +21,7 @@ import jieba  # type: ignore
 if hasattr(jieba, "setLogLevel"):  # 工作台的 jieba 兜底 mock 没有这方法
     jieba.setLogLevel(60)  # 静音 "Building prefix dict..."——检索是 agent 在用，噪音会混进每次输出
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 15
 
 DB = MEMORY / "data" / "fragments.db"
 SCHEMA = MEMORY / "config" / "schema.sql"
@@ -794,6 +794,36 @@ def room_for_session(conn: sqlite3.Connection, session_id: str) -> str | None:
     return max(tally, key=tally.get)
 
 
+def source_for_session(conn: sqlite3.Connection, session_id: str) -> str:
+    """Return stable adapter provenance for Card policy and persistence.
+
+    Tree/v2 adapters register their namespace explicitly. The remaining live
+    compatibility path is an enrolled Claude Code project; unknown legacy
+    material stays `legacy` instead of borrowing message speaker/model labels.
+    """
+    tree = conn.execute(
+        "SELECT source FROM conversation_card_branches WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    if tree:
+        return tree["source"]
+    routed = conn.execute(
+        "SELECT source FROM source_sessions WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    if routed:
+        return routed["source"]
+    rows = conn.execute(
+        "SELECT source_file FROM turns WHERE session_id = ? AND source_file IS NOT NULL",
+        (session_id,),
+    ).fetchall()
+    if any(Path(row["source_file"]).match("phone-*.jsonl") for row in rows):
+        return "phone"
+    if any("/.claude/projects/" in row["source_file"] for row in rows):
+        return "claude-code"
+    return "legacy"
+
+
 def is_tree_card_session(conn: sqlite3.Connection, session_id: str) -> bool:
     return conn.execute(
         "SELECT 1 FROM conversation_card_branches WHERE session_id = ?",
@@ -942,8 +972,8 @@ def insert_card(
     conn.execute(
         """
         INSERT OR REPLACE INTO cards
-        (card_id, session_id, turn_start, turn_end, headline, share, private, timestamp, room, model)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (card_id, session_id, turn_start, turn_end, headline, share, private, timestamp, room, model, source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             card["card_id"],
@@ -956,6 +986,7 @@ def insert_card(
             card.get("timestamp"),
             card.get("room", DEFAULT_ROOM),
             card.get("model"),
+            card.get("source", "legacy"),
         ),
     )
     for tag in card.get("tags") or []:

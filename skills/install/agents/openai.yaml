@@ -1,0 +1,4 @@
+interface:
+  display_name: "Install Neroli"
+  short_description: "Install and connect a new Neroli memory engine"
+  default_prompt: "Use $neroli-install to install and integrate Neroli one verified stage at a time."

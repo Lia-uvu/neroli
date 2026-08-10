@@ -66,6 +66,75 @@ class SessionEligibilityTest(unittest.TestCase):
 
         self.assertNotIn("phone-short", session_ids)
 
+    def test_source_policies_apply_distinct_first_card_thresholds(self) -> None:
+        self._ingest("porch-short", 1, "/tmp/porch.jsonl")
+        self.conn.execute(
+            """
+            INSERT INTO source_sessions
+            (session_id, source, native_session_id, source_route, room)
+            VALUES ('porch-short', 'porch', 'native-porch', 'den', 'den')
+            """
+        )
+        self._ingest(
+            "claude-short", 2,
+            "/Users/test/.claude/projects/-tmp-room/session.jsonl",
+        )
+        self.conn.commit()
+        settings = {
+            "card_gen": {
+                "min_first_session_turns": 3,
+                "source_policies": {
+                    "porch": {"enabled": True, "min_first_session_turns": 1},
+                    "claude-code": {"enabled": True, "min_first_session_turns": 3},
+                },
+            }
+        }
+        with patch.object(pipeline, "load_settings", return_value=settings):
+            selected = {sid for sid, _room in pipeline.sessions_needing_update(self.conn)}
+        self.assertIn("porch-short", selected)
+        self.assertNotIn("claude-short", selected)
+
+    def test_source_round_gates_are_independent(self) -> None:
+        self._ingest("porch-one", 1, "/tmp/porch.jsonl")
+        self.conn.execute(
+            """
+            INSERT INTO source_sessions
+            (session_id, source, native_session_id, source_route, room)
+            VALUES ('porch-one', 'porch', 'native-one', 'den', 'den')
+            """
+        )
+        self._ingest(
+            "claude-four", 4,
+            "/Users/test/.claude/projects/-tmp-room/session.jsonl",
+        )
+        self.conn.commit()
+        settings = {
+            "card_gen": {
+                "source_policies": {
+                    "porch": {"min_new_turns": 1, "min_interval_minutes": 10},
+                    "claude-code": {"min_new_turns": 5, "min_interval_minutes": 60},
+                }
+            }
+        }
+        with patch.object(pipeline, "load_settings", return_value=settings):
+            self.assertTrue(pipeline.check_card_gen_threshold(self.conn, "porch")[0])
+            self.assertFalse(pipeline.check_card_gen_threshold(self.conn, "claude-code")[0])
+
+    def test_phone_journal_is_distinct_from_claude_code_source(self) -> None:
+        self._ingest(
+            "phone-session", 3,
+            "/Users/test/.claude/projects/-tmp-room/phone-20260810-abcd.jsonl",
+        )
+        self._ingest(
+            "claude-session", 3,
+            "/Users/test/.claude/projects/-tmp-room/session.jsonl",
+        )
+        self.assertEqual(db.source_for_session(self.conn, "phone-session"), "phone")
+        self.assertEqual(
+            db.source_for_session(self.conn, "claude-session"), "claude-code"
+        )
+
+
 
 if __name__ == "__main__":
     unittest.main()

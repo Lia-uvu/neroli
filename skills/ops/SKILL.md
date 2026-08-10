@@ -1,6 +1,6 @@
 ---
 name: neroli-ops
-description: Agent-native operations guide for maintaining Neroli. Use it to route maintenance, tuning, troubleshooting, and module-specific edits to the smallest relevant ops note.
+description: Operate and maintain an existing Neroli installation. Use for running or configuring the pipeline; inspecting production state; backups, locks, migrations, scheduling, and incidents; tuning modules; or editing implementation and operational procedures. Route to the smallest relevant ops note, and use neroli-design first when deterministic behavior or a long-lived boundary may change.
 ---
 
 # Neroli OPS — instructions for the maintaining agent
@@ -12,7 +12,8 @@ You are a coding agent maintaining an existing Neroli install. Start here when t
 1. Read only the smallest relevant module note first; do not load the whole ops set unless the task crosses module boundaries.
 2. For passwords, API keys, and authorization prompts, stop and call the user instead of trying increasingly indirect workarounds.
 3. Do not call Claude or any other paid model/agentic CLI unless the user has explicitly allowed that action for this task.
-4. When a deterministic behavior or file layout changes, update the corresponding documentation in the same pass.
+4. Before finishing, inspect the diff. If behavior, architecture, schema, contracts, configuration,
+   or an operational procedure changed, update the owning documentation and tests in the same pass.
 
 ## Route by module
 

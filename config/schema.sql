@@ -1,3 +1,5 @@
+-- schema v15（2026-08-10，phone 与 claude-code 来源纠正）
+-- schema v14（2026-08-10，Card adapter/source provenance）
 -- schema v13（2026-08-03，恢复 Card inclusive/fork overlap 的 node membership）
 -- schema v12（2026-08-03，source-neutral conversation tree + rendering observations）
 -- schema v11（2026-07-31，canonical adapter identity + explicit local room routing policy）
@@ -24,7 +26,7 @@
 -- 暂未含（待设计）：profile 画像注入层；embedding 向量索引。（constant 篮子已在 v7 落表）
 
 PRAGMA journal_mode = WAL;
-PRAGMA user_version = 13;
+PRAGMA user_version = 15;
 
 CREATE TABLE IF NOT EXISTS pipeline_runs (
   id TEXT PRIMARY KEY,
@@ -240,10 +242,12 @@ CREATE TABLE IF NOT EXISTS cards (
   private    TEXT NOT NULL DEFAULT '',     -- 仅 room 可见
   timestamp  TEXT,                         -- 原始对话发生时间，唯一时间字段
   room       TEXT NOT NULL,                -- 房间名（rooms.json），隐私过滤用；写入方总是显式给值
-  model      TEXT                          -- 官方 API 格式原样
+  model      TEXT,                         -- 官方 API 格式原样
+  source     TEXT NOT NULL DEFAULT 'legacy' -- adapter/source namespace；不是 speaker/model/room
 );
 CREATE INDEX IF NOT EXISTS cards_session_idx ON cards(session_id);
 CREATE INDEX IF NOT EXISTS cards_time_idx    ON cards(timestamp);
+CREATE INDEX IF NOT EXISTS cards_source_idx ON cards(source);
 
 -- Tree-node membership for Cards. Inclusive rolling boundaries and fork context
 -- intentionally allow one canonical node to appear in more than one Card.

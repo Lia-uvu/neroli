@@ -44,7 +44,7 @@ def default_model() -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="recall-pipeline: ingest transcripts, build factual memory.")
+    parser = argparse.ArgumentParser(description="Neroli: ingest transcripts, build factual memory.")
     parser.add_argument("inputs", nargs="*", type=Path, help="Claude JSONL, normalized JSON, or test txt files.")
     parser.add_argument("--provider", choices=["ollama", "api", "cli"], default=DEFAULT_PROVIDER, help="Model provider (default: cli).")
     parser.add_argument("--model", default=None, help="Model name for the selected provider.")

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Neroli Operations"
+  short_description: "Run, maintain, and troubleshoot a Neroli installation"
+  default_prompt: "Use $neroli-ops to operate or troubleshoot this Neroli installation safely."

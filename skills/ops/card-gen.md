@@ -33,6 +33,7 @@ bin/cli.py --auto-cards --dry-run
 | `min_first_session_turns` | 3 | 无卡新 session 首次出卡的最低 turns 数（≤2 turns 不出卡）；已有卡的 session 不受此限制 |
 | `min_first_session_turns_exempt_source_globs` | `[]` | 来源文件匹配任一 SQLite GLOB 时，绕过首次出卡 turns 门槛；例如 `*/phone-*.jsonl` |
 | `min_first_session_turns_exempt_sources` | `[]` | tree adapter 的 `source` 精确匹配时绕过首次门槛；属本机 memory policy，不进 adapter contract |
+| `source_policies.<source>` | `{}` | 按 adapter source 覆盖 `enabled`、`min_new_turns`、`min_interval_minutes`、`min_first_session_turns`；未写的键继承全局值 |
 | `max_sessions_per_trigger` | 10 | 每次触发最多处理几个 session |
 | `model` | gpt-5.5 | 模型名 |
 | `reasoning_effort` | low | codex exec 的 reasoning effort。合法值：`minimal`/`low`/`medium`/`high`/`xhigh`/`max`/`ultra`——注意 ChatGPT 界面的 "light thinking" 对应这里的 `low`，写 `light` 会被 codex 拒掉导致出卡静默失败 |
@@ -46,8 +47,9 @@ bin/cli.py --auto-cards --dry-run
 `change_watermarks(name='turns')`。SQLite trigger 只在 `turns` 业务字段实际增删改时递增
 revision，所以 cards/index 写同一个 DB 不会自触发，幂等重扫也不会虚假唤醒。
 
-水位变化后 watcher 调用现成的 `--auto-cards`，仍受上表的 5 rounds、60 分钟和每次最多
-10 sessions 等闸门约束。一次水位变化只触发一次检查；与旧 fswatch 行为一致，冷却时间到期
+水位变化后 watcher 调用现成的 `--auto-cards`；候选 session 按稳定 source provenance
+分别应用 enabled、新 rounds、cooldown 与首次门槛，每次最多处理 `max_sessions_per_trigger`
+个 session。一次水位变化只触发一次检查；与旧 fswatch 行为一致，冷却时间到期
 本身不会制造新事件，下一次 `turns` 变化或 nightly 才会再检查。
 
 开关和轮询间隔在 `settings.watcher`：
