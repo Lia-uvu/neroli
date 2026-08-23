@@ -30,7 +30,7 @@ or infer source facts that the source cannot authoritatively provide.
 | Captured content | Preserve source message text, role, and occurrence time without rewriting it; keep source line order for audit | Validate and persist portable content | Read eligible content as input; cards remain derived and rebuildable |
 | Conversation structure | Normalize each node to at most one authoritative parent | Persist a forest of roots, nodes, and parent edges | Traverse ancestor paths for context and new branch tails for owned material |
 | Branch status | Do not translate runtime leaf/head selection into memory semantics | Store no main, active, continued, withdrawn, preferred, or abandoned flag | Treat every captured branch equally |
-| Runtime observation | Submit optional context + node + time when the source exposes it authoritatively | Store it outside nodes; never advance the Card watermark | History may choose an observed path; Card Gen never reads it |
+| Source observation | Submit optional context + node + time facts: a runtime cursor, or cold-archive root membership when authoritative | Store it outside nodes; never advance the Card watermark | History may choose a cursor path or group archive roots; Card Gen never reads it |
 | Shared prefix | Reuse stable native node IDs instead of copying them into new identities | Store one node with its parent edge | Reuse ancestors as context; do not card the same shared material again |
 | Source-specific events | Keep structural skeletons needed for parent chains; retain the rich native journal outside the portable contract | Accept only public contract fields; do not depend on a harness journal format | Do not interpret harness lifecycle events as Card policy |
 | Room origin | Submit the configured room the adapter explicitly served | Validate that the room exists and the source may submit to it; do not remap it | Apply local visibility and memory policy for that room |
@@ -72,7 +72,10 @@ through one compatibility loader. `ingest.tree_card_projection_sources` records
 that transition boundary. It must not be used to silently make a captured source
 ineligible for memory: the compatibility projection remains the sole Card input
 until identities and historical Cards are explicitly migrated. Current Claude
-Code ingestion uses this dual-write transition; Porch projects its tree directly.
+Code ingestion uses this dual-write transition; Claude.ai archive history uses the
+same bounded exception while its existing loader remains the sole Card projection;
+Porch projects its tree directly. Claude.ai `archive-root` observations group all
+captured roots of one native conversation without inventing an active cursor.
 
 ## What normalized v2 input means today
 

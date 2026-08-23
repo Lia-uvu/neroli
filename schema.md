@@ -69,7 +69,9 @@ Tree-aware adapter 的 canonical 正本。节点以 `(source, room, native_node_
 
 可选、只追加的 source observation。当前 `cursor` 记录“在某 runtime context 与
 observed_at，指针在哪个节点”。History 投影可沿 parent 还原当时路径；Card Gen
-不读此表，写此表也不推进 `turns` 水位。
+不读此表，写此表也不推进 `turns` 水位。冷 archive 可用 `archive-root` 记录一个 native
+conversation 所含的 captured component roots；同 context 可有多条，它们只用于聚合 History，
+不表示 active path。
 
 | 字段 | 说明 |
 |------|------|

@@ -158,6 +158,13 @@ Parents may already exist or arrive in the same batch.
 - `payload` is optional free JSON object data. Neroli preserves it but does not
   infer Card or branch semantics from it.
 
+V1 consumers currently understand two observation uses. `cursor` records an
+authoritative selected node and may produce a highlighted ancestor path.
+`archive-root` records source-authoritative membership of a cold archive component
+in a native conversation context. A context may have several current
+`archive-root` rows; they are aggregated into one catalog item and selected
+rendering loads every referenced component. They never produce a highlighted path.
+
 Neroli derives an observation identity from the complete normalized fact, so an
 identical replay is idempotent and a later cursor position is a new row. No
 observation insert or replay writes `turns` or advances the Card watermark.
@@ -230,6 +237,30 @@ behavior. The split is receiving-instance policy, not a new wire-format feature;
 new tree sources normally project directly, and retiring the compatibility path
 requires an explicit identity migration.
 
+### Claude.ai archive mapping
+
+- Conversation/message `uuid` and `parent_message_uuid` map directly to native
+  context/node/parent identity; duplicate exports are checked and collapsed.
+- When several full exports contain the same conversation, the adapter selects the
+  latest `updated_at` snapshot and then the fullest snapshot at that instant. An
+  equally recent/full factual conflict or a latest snapshot that drops an earlier
+  node is a hard failure; snapshots are not unioned into invented edit history.
+- Human/assistant text blocks become portable messages. Attachments, files,
+  summaries, account metadata, and conversation titles remain in the archive.
+- Sibling leaves stay siblings. A referenced parent absent from every selected
+  snapshot becomes a detached root; the adapter does not infer an edge from array
+  order, timestamps, or matching text.
+- Because the export has conversation membership but no authoritative active leaf,
+  every captured component root gets an `archive-root` observation under the
+  conversation UUID. This is catalog/render membership, not cursor state.
+- The receiving room is an explicit backfill argument and must pass local
+  `ingest.source_rooms` authorization.
+
+`src/claude_ai_adapter.py` implements this mapping. During the legacy transition,
+`scripts/backfill_claude_ai_history.py` always ingests with Card projection off:
+the existing archive loader remains the only source of turns/Cards. The script is
+dry-run by default and requires `--apply` to write canonical history.
+
 ## Neroli tree layer
 
 Neroli's canonical responsibility is only:
@@ -281,20 +312,21 @@ child, main, or continuation in the canonical tree.
 ## History rendering
 
 `src/history.py::list_history_contexts` and `bin/cli.py --list-history-contexts`
-return a bounded, recency-ordered page of the latest cursor per
-`(room, source, native context)`. Room and source are optional list filters; when
+return a bounded, recency-ordered page with one item per
+`(room, source, native context)`: the latest cursor, or one representative
+`archive-root` row for a cold archive context. Room and source are optional list filters; when
 room is omitted, every item still carries its canonical room so a unified local
 client can keep selection room-bound.
 The limit is constrained to 1–100, offset is explicit, and the response carries
 `has_more`, a first-user-message preview, and observed path length without
 returning message bodies for the whole database.
 
-`render_history` still requires an explicit room. With `native_context_id` it follows that context's latest
-observation to its root, then returns only the complete connected component for
-that root. It intentionally includes sibling branches so a renderer can change
-paths locally; it does not materialize unrelated roots. The cursor projection
-follows parent edges to return its observed path. Changing only an observation
-changes that render path and nothing in Card state.
+`render_history` still requires an explicit room. With `native_context_id` it follows
+that context's latest observations to their roots, then returns only the complete
+referenced components. It intentionally includes sibling branches. A cursor
+projection follows parent edges to return its observed path; `archive-root`
+observations return no path and may reference several detached roots. Changing only
+an observation changes rendering and nothing in Card state.
 
 Calling `--render-history` without `--history-context` still returns the full room
 forest as an unbounded diagnostic projection. It is not the Porch history UI

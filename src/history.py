@@ -43,7 +43,8 @@ def _latest_observation_rows(
             SELECT observation_id, source, room, native_context_id, kind,
                    observed_at, node_id, native_node_id, payload_json,
                    ROW_NUMBER() OVER (
-                       PARTITION BY room, source, native_context_id, kind
+                       PARTITION BY room, source, native_context_id, kind,
+                                    CASE WHEN kind = 'archive-root' THEN node_id ELSE '' END
                        ORDER BY observed_at DESC, observation_id DESC
                    ) AS recency
             FROM conversation_observations
@@ -52,6 +53,65 @@ def _latest_observation_rows(
         WHERE recency = 1
         ORDER BY observed_at DESC, observation_id DESC
         {page}
+        """,
+        params,
+    ).fetchall()
+
+
+def _latest_catalog_rows(
+    conn: sqlite3.Connection,
+    *,
+    room: str | None,
+    source: str | None,
+    limit: int,
+    offset: int,
+) -> list[sqlite3.Row]:
+    """Return one representative row per cursor/archive context.
+
+    ``archive-root`` may have several current rows for one context because an
+    exported conversation can contain disconnected captured components.  The
+    catalog still presents that source context once; selected rendering loads all
+    of its roots through ``_latest_observation_rows``.
+    """
+    clauses = ["kind IN ('cursor', 'archive-root')"]
+    params: list[str | int] = []
+    if room:
+        clauses.append("room = ?")
+        params.append(room)
+    if source:
+        clauses.append("source = ?")
+        params.append(source)
+    params.extend([limit, offset])
+    return conn.execute(
+        f"""
+        WITH latest_per_key AS (
+            SELECT observation_id, source, room, native_context_id, kind,
+                   observed_at, node_id, native_node_id, payload_json,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY room, source, native_context_id, kind,
+                                    CASE WHEN kind = 'archive-root' THEN node_id ELSE '' END
+                       ORDER BY observed_at DESC, observation_id DESC
+                   ) AS key_recency
+            FROM conversation_observations
+            WHERE {' AND '.join(clauses)}
+        ), catalog AS (
+            SELECT observation_id, source, room, native_context_id, kind,
+                   observed_at, node_id, native_node_id, payload_json,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY room, source, native_context_id
+                       ORDER BY observed_at DESC,
+                                CASE WHEN kind = 'cursor' THEN 0 ELSE 1 END,
+                                observation_id DESC
+                   ) AS context_recency
+            FROM latest_per_key
+            WHERE key_recency = 1
+        )
+        SELECT observation_id, source, room, native_context_id, kind,
+               observed_at, node_id, native_node_id, payload_json
+        FROM catalog
+        WHERE context_recency = 1
+        ORDER BY observed_at DESC, observation_id DESC
+        LIMIT ? OFFSET ?
         """,
         params,
     ).fetchall()
@@ -101,22 +161,39 @@ def list_history_contexts(
     if offset < 0:
         raise ValueError("history context offset must be non-negative")
 
-    rows = _latest_observation_rows(
+    rows = _latest_catalog_rows(
         conn,
         room=room,
         source=source,
-        kind="cursor",
         limit=limit + 1,
         offset=offset,
     )
     has_more = len(rows) > limit
     items = []
     for row in rows[:limit]:
-        preview, path_nodes = _observed_path_summary(conn, row["node_id"])
+        if row["kind"] == "archive-root":
+            context_observations = _latest_observation_rows(
+                conn,
+                room=row["room"],
+                source=row["source"],
+                native_context_id=row["native_context_id"],
+                kind="archive-root",
+            )
+            component = _component_nodes(conn, context_observations)
+            user_rows = [
+                node for node in component
+                if node["role"] == "user" and (node["text"] or "").strip()
+            ]
+            user_rows.sort(key=lambda node: (node["occurred_at"] or "", node["node_id"]))
+            preview = user_rows[0]["text"] if user_rows else None
+            path_nodes = len(component)
+        else:
+            preview, path_nodes = _observed_path_summary(conn, row["node_id"])
         items.append({
             "source": row["source"],
             "room": row["room"],
             "native_context_id": row["native_context_id"],
+            "kind": row["kind"],
             "observed_at": row["observed_at"],
             "node_id": row["node_id"],
             "native_node_id": row["native_node_id"],
@@ -249,13 +326,14 @@ def render_history(
     rendered_observations = []
     for row in observations:
         path: list[str] = []
-        current = row["node_id"]
-        seen: set[str] = set()
-        while current in node_ids and current not in seen:
-            seen.add(current)
-            path.append(current)
-            current = parent_by_id.get(current)
-        path.reverse()
+        if row["kind"] == "cursor":
+            current = row["node_id"]
+            seen: set[str] = set()
+            while current in node_ids and current not in seen:
+                seen.add(current)
+                path.append(current)
+                current = parent_by_id.get(current)
+            path.reverse()
         rendered_observations.append({
             "observation_id": row["observation_id"],
             "source": row["source"],

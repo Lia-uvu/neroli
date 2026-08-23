@@ -31,7 +31,8 @@
 
 Tree-aware adapter 把完整 `node + parent` 原文树和可选 observation 交给 Ingest。Neroli
 保存 `conversation_nodes` 正本，将对话节点投影到统一 `messages` / `turns` 供 Card Gen。
-observation 只写 `conversation_observations`，History 用它还原 runtime 当时指向的路径；它不写
+observation 只写 `conversation_observations`；History 用 cursor 还原 runtime 当时指向的路径，
+也可用 archive-root 聚合冷归档的 conversation/components。两者都不写
 `turns`、不进入 Card 规划。SQLite 在
 `turns` 的实际 INSERT / UPDATE / DELETE 上维护 `change_watermarks.turns`；独立的
 `bin/watch-cards.sh` 轮询这个数据库水位并调用编排层已有的 `--auto-cards`。因此 Card Gen
@@ -51,6 +52,13 @@ attempt journal 还原为线性链，并用 compact boundary 的 `logicalParentU
 避免树桥再次生成一套 turns；普通 tree source（当前 Porch）仍直接投影 Card material。
 移除 Claude 旧 loader 前，必须另做 Card/turn identity 对齐与迁移，不能只把开关翻过来。
 
+Claude.ai archive 也有一条受限的 history-only bridge：`src/claude_ai_adapter.py`
+只翻译 message UUID、显式 parent 与 portable text；缺失的 parent 断成 root，不按时间或数组
+顺序猜边。重复 full exports 按 conversation `updated_at` 选择最新完整快照；最新快照缺旧节点或
+同时间事实冲突时硬失败，不把多个快照拼成虚构编辑历史。archive 没有 active leaf，因此每个 captured root 用 `archive-root` observation 归入
+同一 native conversation context，History 选中时加载全部 components 而不高亮任何 path。
+既有 legacy loader 继续唯一负责这批 archive 的 turns/Cards。
+
 新的 tree-aware adapter 使用 [`neroli-conversation-tree-v1`](docs/conversation-tree-adapter-contract.md)：
 adapter 交完整树和它明确服务的 room，Neroli 校验本机 `ingest.source_rooms` 授权。
 [`neroli-normalized-v2`](docs/normalized-adapter-contract.md) 作为线性 adapter 的兼容契约继续保留：adapter 交
@@ -60,12 +68,13 @@ canonical ID 与 round。adapter 的 `source_route` 只描述入口，本机私�
 adapter 与 Neroli 各自负责什么、当前 parent-linked tree 能表达什么、哪些 deletion
 语义仍未实现，见 [`source adapter boundary`](docs/source-adapter-boundary.md)。
 
-History 有两种显式读取形状。`list_history_contexts` 只从每个 `(room, source, context)` 的
-最新 cursor observation 生成最近列表，`limit` 强制为 1–100 并支持 offset；room/source 都是
+History 有两种显式读取形状。`list_history_contexts` 从每个 `(room, source, context)` 的
+最新 cursor 或 archive-root membership 生成一条最近列表项，`limit` 强制为 1–100 并支持 offset；room/source 都是
 可选筛选，因此统一 GUI 可取跨 room/source 的有界 catalog，而每项仍返回 canonical room。
 `render_history` 带
-`native_context_id` 时先沿 cursor 找到 root，再只加载该 root 的完整 connected component，
-让 GUI 能看到 sibling branches 而不物化整间 room。不带 context 的 full-room render 仍保留为
+`native_context_id` 时通过 observations 找到 referenced roots，再只加载其完整 connected components；
+cursor 提供 highlighted path，archive-root 只聚合 components。这样 GUI 能看到 sibling branches
+而不物化整间 room。不带 context 的 full-room render 仍保留为
 人工诊断入口，不是产品列表 API。两条读取都不写数据库、不跑模型。
 
 ### 边界规则
