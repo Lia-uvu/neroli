@@ -212,6 +212,228 @@ def list_history_contexts(
     }
 
 
+def search_history_contexts(
+    conn: sqlite3.Connection,
+    *,
+    query: str,
+    room: str | None = None,
+    source: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Search canonical portable text and return bounded conversation contexts.
+
+    This intentionally scans ``conversation_nodes`` instead of introducing a
+    persisted search index. Search is a human-local History projection: the
+    canonical tree remains the only source of truth, and MCP is not involved.
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("history search limit must be between 1 and 100")
+    if offset < 0:
+        raise ValueError("history search offset must be non-negative")
+    terms = _history_search_terms(query)
+
+    clauses = [
+        "role IN ('user', 'assistant')",
+        "TRIM(COALESCE(text, '')) != ''",
+    ]
+    params: list[str] = []
+    if room:
+        clauses.append("room = ?")
+        params.append(room)
+    if source:
+        clauses.append("source = ?")
+        params.append(source)
+    term_clauses = []
+    for term in terms:
+        term_clauses.append("INSTR(LOWER(text), LOWER(?)) > 0")
+        params.append(term)
+    clauses.append(f"({' OR '.join(term_clauses)})")
+    matching_nodes = conn.execute(
+        f"""
+        SELECT node_id, parent_node_id, text, occurred_at
+        FROM conversation_nodes
+        WHERE {' AND '.join(clauses)}
+        ORDER BY COALESCE(occurred_at, '') DESC, node_id DESC
+        """,
+        params,
+    ).fetchall()
+
+    parent_clauses: list[str] = []
+    parent_params: list[str] = []
+    if room:
+        parent_clauses.append("room = ?")
+        parent_params.append(room)
+    if source:
+        parent_clauses.append("source = ?")
+        parent_params.append(source)
+    parent_rows = conn.execute(
+        f"""
+        SELECT node_id, parent_node_id
+        FROM conversation_nodes
+        WHERE {' AND '.join(parent_clauses) if parent_clauses else '1 = 1'}
+        """,
+        parent_params,
+    ).fetchall()
+    parent_by_id = {row["node_id"]: row["parent_node_id"] for row in parent_rows}
+    root_cache: dict[str, str] = {}
+
+    observations = [
+        row for row in _latest_observation_rows(conn, room=room, source=source)
+        if row["kind"] in {"cursor", "archive-root"}
+    ]
+    contexts_by_root: dict[str, set[tuple[str, str, str]]] = {}
+    representative: dict[tuple[str, str, str], sqlite3.Row] = {}
+    for observation in observations:
+        key = (
+            observation["room"],
+            observation["source"],
+            observation["native_context_id"],
+        )
+        root = _history_root(observation["node_id"], parent_by_id, root_cache)
+        contexts_by_root.setdefault(root, set()).add(key)
+        current = representative.get(key)
+        candidate_order = (
+            observation["observed_at"],
+            observation["kind"] == "cursor",
+            observation["observation_id"],
+        )
+        current_order = (
+            current["observed_at"],
+            current["kind"] == "cursor",
+            current["observation_id"],
+        ) if current is not None else None
+        if current_order is None or candidate_order > current_order:
+            representative[key] = observation
+
+    matched_terms: dict[tuple[str, str, str], set[str]] = {}
+    snippets: dict[tuple[str, str, str], tuple[int, str]] = {}
+    for node in matching_nodes:
+        text = node["text"] or ""
+        folded = text.casefold()
+        present = {term for term in terms if term.casefold() in folded}
+        if not present:
+            continue
+        root = _history_root(node["node_id"], parent_by_id, root_cache)
+        for key in contexts_by_root.get(root, set()):
+            matched_terms.setdefault(key, set()).update(present)
+            snippet = _history_search_snippet(text, terms)
+            current = snippets.get(key)
+            score = len(present)
+            if current is None or score > current[0]:
+                snippets[key] = (score, snippet)
+
+    matches = [
+        (key, representative[key])
+        for key, found in matched_terms.items()
+        if all(term in found for term in terms)
+    ]
+    matches.sort(
+        key=lambda item: (
+            item[1]["observed_at"],
+            item[1]["observation_id"],
+        ),
+        reverse=True,
+    )
+    selected = matches[offset:offset + limit]
+    items = []
+    for key, row in selected:
+        if row["kind"] == "archive-root":
+            context_observations = _latest_observation_rows(
+                conn,
+                room=row["room"],
+                source=row["source"],
+                native_context_id=row["native_context_id"],
+                kind="archive-root",
+            )
+            component = _component_nodes(conn, context_observations)
+            path_nodes = len(component)
+            user_rows = [
+                node for node in component
+                if node["role"] == "user" and (node["text"] or "").strip()
+            ]
+            user_rows.sort(key=lambda node: (node["occurred_at"] or "", node["node_id"]))
+            preview = user_rows[0]["text"] if user_rows else None
+        else:
+            preview, path_nodes = _observed_path_summary(conn, row["node_id"])
+        items.append({
+            "source": row["source"],
+            "room": row["room"],
+            "native_context_id": row["native_context_id"],
+            "kind": row["kind"],
+            "observed_at": row["observed_at"],
+            "node_id": row["node_id"],
+            "native_node_id": row["native_node_id"],
+            "preview": preview,
+            "snippet": snippets[key][1],
+            "path_nodes": path_nodes,
+            "payload": json.loads(row["payload_json"]),
+        })
+    return {
+        "format": "neroli-history-search-v1",
+        "query": query.strip(),
+        "room": room,
+        "source": source,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + limit < len(matches),
+        "contexts": items,
+    }
+
+
+def _history_search_terms(query: str) -> list[str]:
+    normalized = query.strip()
+    if not normalized:
+        raise ValueError("history search query must not be empty")
+    if len(normalized) > 200:
+        raise ValueError("history search query must not exceed 200 characters")
+    terms = list(dict.fromkeys(part.casefold() for part in normalized.split() if part))
+    if len(terms) > 12:
+        raise ValueError("history search query must not exceed 12 terms")
+    return terms
+
+
+def _history_root(
+    node_id: str,
+    parent_by_id: dict[str, str | None],
+    cache: dict[str, str],
+) -> str:
+    if node_id in cache:
+        return cache[node_id]
+    path: list[str] = []
+    current = node_id
+    seen: set[str] = set()
+    while current in parent_by_id and parent_by_id[current] is not None:
+        if current in seen:
+            raise ValueError(f"conversation tree cycle while searching at {current!r}")
+        seen.add(current)
+        path.append(current)
+        current = parent_by_id[current]  # type: ignore[assignment]
+        if current in cache:
+            current = cache[current]
+            break
+    for item in path:
+        cache[item] = current
+    cache[node_id] = current
+    return current
+
+
+def _history_search_snippet(text: str, terms: list[str], width: int = 140) -> str:
+    normalized = " ".join(text.split())
+    folded = normalized.casefold()
+    positions = [folded.find(term.casefold()) for term in terms]
+    hits = [position for position in positions if position >= 0]
+    center = min(hits) if hits else 0
+    start = max(0, center - width // 3)
+    end = min(len(normalized), start + width)
+    snippet = normalized[start:end]
+    if start > 0:
+        snippet = f"…{snippet}"
+    if end < len(normalized):
+        snippet = f"{snippet}…"
+    return snippet
+
+
 def _component_nodes(
     conn: sqlite3.Connection, observation_rows: list[sqlite3.Row]
 ) -> list[sqlite3.Row]:

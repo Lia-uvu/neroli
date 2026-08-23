@@ -321,6 +321,16 @@ The limit is constrained to 1–100, offset is explicit, and the response carrie
 `has_more`, a first-user-message preview, and observed path length without
 returning message bodies for the whole database.
 
+`src/history.py::search_history_contexts` and `bin/cli.py --search-history
+--history-query QUERY` expose a separate bounded owner-local projection over
+canonical user/assistant node text. Whitespace-separated terms must all occur in
+the same referenced conversation component, though they may occur in different
+messages. Results remain one item per context, ordered by observation recency,
+and add a matching `snippet`; `limit` (1–100), `offset`, optional room/source
+filters, and `has_more` have the same paging meaning as the context catalog.
+The current implementation is a direct read-only scan: it adds no FTS table or
+schema migration, invokes no model/embedding, and is not an MCP surface.
+
 `render_history` still requires an explicit room. With `native_context_id` it follows
 that context's latest observations to their roots, then returns only the complete
 referenced components. It intentionally includes sibling branches. A cursor

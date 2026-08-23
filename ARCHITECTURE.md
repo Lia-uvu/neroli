@@ -68,14 +68,17 @@ canonical ID 与 round。adapter 的 `source_route` 只描述入口，本机私�
 adapter 与 Neroli 各自负责什么、当前 parent-linked tree 能表达什么、哪些 deletion
 语义仍未实现，见 [`source adapter boundary`](docs/source-adapter-boundary.md)。
 
-History 有两种显式读取形状。`list_history_contexts` 从每个 `(room, source, context)` 的
+History 有三种显式读取形状。`list_history_contexts` 从每个 `(room, source, context)` 的
 最新 cursor 或 archive-root membership 生成一条最近列表项，`limit` 强制为 1–100 并支持 offset；room/source 都是
 可选筛选，因此统一 GUI 可取跨 room/source 的有界 catalog，而每项仍返回 canonical room。
 `render_history` 带
 `native_context_id` 时通过 observations 找到 referenced roots，再只加载其完整 connected components；
 cursor 提供 highlighted path，archive-root 只聚合 components。这样 GUI 能看到 sibling branches
 而不物化整间 room。不带 context 的 full-room render 仍保留为
-人工诊断入口，不是产品列表 API。两条读取都不写数据库、不跑模型。
+人工诊断入口，不是产品列表 API。`search_history_contexts` 直接只读扫描 canonical
+`conversation_nodes` 的 user/assistant 正文，多关键词要求同一 context 全部命中，按 context 折叠并返回
+snippet、limit/offset 与 `has_more`。当前第一版不建 FTS 派生表、不做 schema migration，也不通过
+MCP 暴露。三条读取都不写数据库、不跑模型。
 
 ### 边界规则
 

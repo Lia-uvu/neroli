@@ -15,7 +15,11 @@ import db  # noqa: E402
 import loaders  # noqa: E402
 import pipeline  # noqa: E402
 from gen_cards import update_session_cards  # noqa: E402
-from history import list_history_contexts, render_history  # noqa: E402
+from history import (  # noqa: E402
+    list_history_contexts,
+    render_history,
+    search_history_contexts,
+)
 
 
 class StubModel:
@@ -450,6 +454,48 @@ class ConversationTreeContractTest(unittest.TestCase):
             {node["native_node_id"] for node in selected["nodes"]},
             {"root", "left", "right"},
         )
+
+        before_search = self.conn.total_changes
+        first_search_page = search_history_contexts(
+            self.conn,
+            query="question",
+            room="den",
+            source="fake-tree",
+            limit=1,
+        )
+        self.assertEqual(first_search_page["format"], "neroli-history-search-v1")
+        self.assertTrue(first_search_page["has_more"])
+        self.assertEqual(
+            first_search_page["contexts"][0]["native_context_id"],
+            "other-session",
+        )
+        second_search_page = search_history_contexts(
+            self.conn,
+            query="question",
+            room="den",
+            source="fake-tree",
+            limit=1,
+            offset=1,
+        )
+        self.assertEqual(
+            second_search_page["contexts"][0]["native_context_id"],
+            "runtime-session",
+        )
+        cross_message_terms = search_history_contexts(
+            self.conn,
+            query="question right",
+            room="den",
+            source="fake-tree",
+        )
+        self.assertEqual(
+            [item["native_context_id"] for item in cross_message_terms["contexts"]],
+            ["runtime-session"],
+        )
+        self.assertIn("right", cross_message_terms["contexts"][0]["snippet"])
+        self.assertEqual(self.conn.total_changes, before_search)
+
+        with self.assertRaisesRegex(ValueError, "must not be empty"):
+            search_history_contexts(self.conn, query="   ")
 
 
 if __name__ == "__main__":

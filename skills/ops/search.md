@@ -45,6 +45,21 @@ viewer 是 server 启动参数，不出现在工具 schema；数据库用 SQLite
 Card generation，因此它不会写 `card_access`、不会调用 embedding/model，也不会让模型扩大
 自己的 room 权限。协议与 privacy regression 在 `tests/search/test_mcp_server.py`。
 
+## 本机 History 正文搜索
+
+Porch GUI 的 owner-local 搜索走独立的 canonical History contract，不复用 Card Search/MCP：
+
+```sh
+python3 bin/cli.py --db /absolute/path/fragments.db \
+  --search-history --history-query "关键词" --history-limit 20 --history-offset 0
+```
+
+它只读扫描 `conversation_nodes` 中 user/assistant 正文，多个空格分隔词必须在同一 conversation
+component 内全部出现（可以分散在多条消息），按 context 折叠并返回 snippet。可加
+`--history-room` / `--history-source`；继续翻页只增加 offset。第一版刻意不建 FTS 表、不迁移 schema、
+不调用 embedding/model，也不暴露给 MCP。它与下文 Card 关键词检索是两个读模型：前者供 Lia 本机
+浏览已摄入的 canonical 对话，后者供记忆 Card 召回并遵守 viewer/share/private 规则。
+
 ## 一次调用拿全（agent 用户的回合经济）
 
 - `关键词 --expand N`：搜完自动展开前 N 条命中全文（每张计一笔 card_access）。
