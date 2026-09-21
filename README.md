@@ -78,6 +78,7 @@ They explain how the system arrived here; they are not specifications for curren
 
 ## Repository guide
 
+- [Technical overview](TECHNICAL-OVERVIEW.md) — implemented design and algorithms
 - [Architecture](ARCHITECTURE.md) — module ownership, data flow, and boundaries
 - [SQLite schema](schema.md) — persisted structure and migrations
 - [Source adapter boundary](docs/source-adapter-boundary.md) — source facts versus Neroli policy
