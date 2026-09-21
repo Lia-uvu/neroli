@@ -125,51 +125,67 @@ def is_claude_export(data: Any) -> bool:
 # ── Claude Code JSONL candidate 加载器 ──────────────────────────────────────
 
 def load_claude_jsonl_candidates(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
+    parsed_rows: list[tuple[int, dict[str, Any]]] = []
+    failed_phone_users: set[str] = set()
     with path.open("r", encoding="utf-8") as handle:
         for idx, line in enumerate(handle):
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            # 结构性非对话内容按顶层字段拦掉：
-            #   toolUseResult=工具结果，isMeta=系统注入，
-            #   isCompactSummary=压缩摘要，isVisibleInTranscriptOnly=仅 UI 提示，
-            #   isApiErrorMessage / error / apiErrorStatus=API 报错。
-            if "toolUseResult" in obj or obj.get("isMeta"):
+            if not isinstance(obj, dict):
                 continue
-            if obj.get("isCompactSummary") or obj.get("isVisibleInTranscriptOnly") or obj.get("isApiErrorMessage"):
-                continue
-            if obj.get("error") or obj.get("apiErrorStatus"):
-                continue
-            message = obj.get("message") or {}
-            role = message.get("role")
-            if role not in {"user", "assistant"}:
-                continue
-            content = message.get("content")
-            text = text_from_content(content)
-            if role == "user":
-                text = clean_user_text(text)
-            if not text:
-                continue
-            img = count_images(content)
-            source = model_to_source(obj.get("model") or message.get("model"))
-            rows.append(
-                {
-                    "role": role,
-                    "text": text,
-                    "timestamp": obj.get("timestamp") or "",
-                    "session_id": obj.get("sessionId") or path.stem,
-                    "source_file": str(path),
-                    "source": source if role == "assistant" else user_source_label(),
-                    "source_uuid": obj.get("uuid") or f"jsonl:{path.stem}:{idx}",
-                    "parent_uuid": obj.get("parentUuid") or "",
-                    "has_image": 1 if img else 0,
-                    "image_count": img,
-                    "line_no": idx,
-                    "model": obj.get("model") or message.get("model") or "",
-                }
-            )
+            parsed_rows.append((idx, obj))
+            if obj.get("type") == "phone-error":
+                parent_id = obj.get("parentUuid")
+                if isinstance(parent_id, str) and parent_id:
+                    failed_phone_users.add(parent_id)
+
+    rows: list[dict[str, Any]] = []
+    for idx, obj in parsed_rows:
+        # phone writes the attempted user text before making the request so a
+        # network failure cannot lose Lia's words. Its explicit phone-error row
+        # makes that parent a delivery attempt, not a completed turn.
+        if obj.get("uuid") in failed_phone_users:
+            continue
+        # 结构性非对话内容按顶层字段拦掉：
+        #   toolUseResult=工具结果，isMeta=系统注入，
+        #   isCompactSummary=压缩摘要，isVisibleInTranscriptOnly=仅 UI 提示，
+        #   isApiErrorMessage / error / apiErrorStatus=API 报错。
+        if "toolUseResult" in obj or obj.get("isMeta"):
+            continue
+        if obj.get("isCompactSummary") or obj.get("isVisibleInTranscriptOnly") or obj.get("isApiErrorMessage"):
+            continue
+        if obj.get("error") or obj.get("apiErrorStatus"):
+            continue
+        message = obj.get("message") or {}
+        role = message.get("role")
+        if role not in {"user", "assistant"}:
+            continue
+        content = message.get("content")
+        text = text_from_content(content)
+        if role == "user":
+            text = clean_user_text(text)
+        if not text:
+            continue
+        img = count_images(content)
+        source = model_to_source(obj.get("model") or message.get("model"))
+        rows.append(
+            {
+                "role": role,
+                "text": text,
+                "timestamp": obj.get("timestamp") or "",
+                "session_id": obj.get("sessionId") or path.stem,
+                "source_file": str(path),
+                "source": source if role == "assistant" else user_source_label(),
+                "source_uuid": obj.get("uuid") or f"jsonl:{path.stem}:{idx}",
+                "parent_uuid": obj.get("parentUuid") or "",
+                "has_image": 1 if img else 0,
+                "image_count": img,
+                "line_no": idx,
+                "model": obj.get("model") or message.get("model") or "",
+            }
+        )
     # 多文件排序键：同会话跨文件按文件最早时间戳排，文件内按 line_no（追加序）。
     # 不用 timestamp 主排序——60% 文件时间戳非单调，但追加序 0 因果倒置。
     earliest = min((r["timestamp"] for r in rows if r["timestamp"]), default="")

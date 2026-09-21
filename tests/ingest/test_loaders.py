@@ -120,6 +120,38 @@ class LoaderCharacterizationTest(unittest.TestCase):
         self.assertEqual(["goal"], [m.source_uuid for m in messages])
         self.assertEqual("please keep this sentence", messages[0].text)
 
+    def test_phone_error_suppresses_its_failed_user_attempt(self):
+        path = self._jsonl(
+            "phone-20260811-1444-deadbeef.jsonl",
+            [
+                {
+                    "type": "user", "uuid": "failed-user", "sessionId": "phone-session",
+                    "timestamp": "2026-08-11T06:44:00Z",
+                    "message": {"role": "user", "content": "please retry me"},
+                },
+                {
+                    "type": "phone-error", "uuid": "transport-error",
+                    "parentUuid": "failed-user", "sessionId": "phone-session",
+                    "timestamp": "2026-08-11T06:44:01Z", "error": "EOF",
+                },
+                {
+                    "type": "user", "uuid": "delivered-user", "sessionId": "phone-session",
+                    "timestamp": "2026-08-11T06:44:02Z", "parentUuid": "failed-user",
+                    "message": {"role": "user", "content": "please retry me"},
+                },
+                {
+                    "type": "assistant", "uuid": "answer", "sessionId": "phone-session",
+                    "timestamp": "2026-08-11T06:44:03Z", "parentUuid": "delivered-user",
+                    "message": {"role": "assistant", "content": "delivered"},
+                },
+            ],
+        )
+
+        messages = load_messages_for_ingest([path])
+
+        self.assertEqual(["delivered-user", "answer"], [m.source_uuid for m in messages])
+        self.assertEqual([1, 1], [m.round for m in messages])
+
     def test_export_overlap_dedupes_by_session_and_native_message_uuid(self):
         conversation = {
             "uuid": "conversation-1",

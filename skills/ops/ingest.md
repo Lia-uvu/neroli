@@ -47,9 +47,21 @@ python3 scripts/ingest_claude_tree.py --db data/fragments.db \
 python3 scripts/ingest_claude_tree.py --db data/fragments.db \
   --repair-history-structure
 
+# 清理电话亭明确标记为未送达的 user 尝试；默认 dry-run。
+# apply 前停 ingest/card watcher、确认无活锁并在线备份数据库；apply 后全量 ingest 重编号，
+# 再运行 --rebuild-cards 重建零模型派生视图。覆盖失败轮次的旧卡会被删除，不自动付费重喂。
+python3 scripts/repair_phone_failed_attempts.py
+python3 scripts/repair_phone_failed_attempts.py --apply
+
 # 只导入 Claude.ai 下载包里的 conversations.json（不碰 projects/users/memories）
 python3 scripts/ingest_claude_ai_exports.py --dry-run
 python3 scripts/ingest_claude_ai_exports.py
+
+# 将同一 archive 回填到 canonical History；默认只报结构计数，显式 --apply 才写库。
+# 先在私有 settings.ingest.source_rooms 授权 claude-ai -> ROOM；这条路径固定 history-only，
+# 不写第二份 turns/Cards，不跑模型。生产 apply 前仍须停 watcher、备份并检查活锁。
+python3 scripts/backfill_claude_ai_history.py --room ROOM
+python3 scripts/backfill_claude_ai_history.py --room ROOM --apply
 ```
 
 Claude Code 的实时 ingest 由 launchd fswatch watcher 自动跑（见 [common.md](common.md)）。
@@ -76,7 +88,11 @@ watcher 的全房间重读默认走增量：只重读 mtime 变过的文件，**
 加载按来源家族路由（`load_messages_for_ingest`），三族的 `source_uuid` / `session_id` / 排序规则见 [schema.md](../../schema.md) 「三个 source 家族」：
 
 - **Claude Code JSONL** — `~/.claude/projects/<room>/*.jsonl`，watcher 实时 tail 已配置的 room
-- **Claude.ai 导出** — `backups/origin-data/**/conversations.json`，一次性手动 backfill；写入 turns 后同样抬 DB 水位
+- **Claude.ai 导出** — `backups/origin-data/**/conversations.json`，一次性手动 backfill；既有
+  loader 写入 turns 后同样抬 DB 水位。另有默认 dry-run 的 canonical History backfill，沿显式
+  parent 建树并用 archive-root 聚合同一 conversation；多个 full export 按 conversation
+  `updated_at` 选择最新完整快照，缺旧节点或同时间冲突则停止。该 bridge 固定 history-only，
+  不重复写 turns/Cards
 - **normalized adapter v2** — `neroli-normalized-v2` envelope；adapter 交 native identity、
   不可变原文、UTC 发生时间、稳定 `source_sequence` 与 `source_route`，Neroli 统一生成
   canonical session/message ID、round 和 room。完整 contract 见
@@ -135,4 +151,7 @@ normalization。它不输出正文，也不调用模型。
   `conversation_nodes`。分叉的新增物料只归一个 processing stream 触发，但 inclusive/fork
   Card 边界允许同一节点出现在多张 `card_nodes` membership 中。
 - 清洗只去掉平台噪声（空消息、附件壳、系统占位等），不改写用户/agent 原话。
+- phone journal 的 `phone-error.parentUuid` 明确表示对应 user 未成功送达；legacy turns 跳过该
+  user，canonical tree 保留结构 event 但不投影 portable message。重试成功会以新的原生 UUID
+  形成正常 user/assistant，不靠正文相似度判断。
 - 导入后抽查 `messages` / `turns` 计数、首尾时间、几条原文内容；再跑一次 ingest，计数不应重复增长。

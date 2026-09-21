@@ -96,6 +96,14 @@ def export_claude_code_tree(
                 occurrences.setdefault(native_node_id, []).append(occurrence)
                 if occurrence.is_compaction:
                     compaction_ids.add(native_node_id)
+        failed_phone_users = _phone_failed_user_ids(source_rows)
+        if failed_phone_users:
+            for node_id in failed_phone_users:
+                group = occurrences.get(node_id, [])
+                if group:
+                    occurrences[node_id] = [
+                        _as_failed_phone_attempt(item) for item in group
+                    ]
         for node_id, parent_id in _source_parent_overrides(source_rows, path).items():
             previous = parent_overrides.get(node_id)
             if previous is not None and previous != parent_id:
@@ -201,6 +209,31 @@ def _normalize_occurrence(raw: dict[str, Any], path: Path, line_no: int) -> _Occ
         is_compaction=is_compaction,
         file=path,
         line_no=line_no,
+    )
+
+
+def _phone_failed_user_ids(rows: list[dict[str, Any]]) -> set[str]:
+    """Return users explicitly marked by phone as undelivered attempts."""
+    return {
+        parent_id
+        for raw in rows
+        if raw.get("type") == "phone-error"
+        for parent_id in [_string(raw.get("parentUuid"))]
+        if parent_id is not None
+    }
+
+
+def _as_failed_phone_attempt(item: _Occurrence) -> _Occurrence:
+    return _Occurrence(
+        native_node_id=item.native_node_id,
+        native_parent_node_id=item.native_parent_node_id,
+        occurred_at=item.occurred_at,
+        kind="event",
+        source_type="user:phone-failed-attempt",
+        message=None,
+        is_compaction=False,
+        file=item.file,
+        line_no=item.line_no,
     )
 
 

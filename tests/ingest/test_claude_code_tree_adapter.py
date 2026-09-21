@@ -298,6 +298,37 @@ class ClaudeCodeTreeAdapterTest(unittest.TestCase):
             },
         )
 
+    def test_phone_error_keeps_attempt_structural_but_not_portable(self) -> None:
+        path = self.root / "phone-20260811-1444-deadbeef.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "user", "uuid": "failed-user", "parentUuid": None,
+                    "sessionId": "session", "timestamp": "2026-08-11T06:44:00Z",
+                    "message": {"role": "user", "content": "please retry me"},
+                },
+                {
+                    "type": "phone-error", "uuid": "error", "parentUuid": "failed-user",
+                    "sessionId": "session", "timestamp": "2026-08-11T06:44:01Z",
+                    "error": "EOF",
+                },
+                {
+                    "type": "user", "uuid": "delivered-user", "parentUuid": "failed-user",
+                    "sessionId": "session", "timestamp": "2026-08-11T06:44:02Z",
+                    "message": {"role": "user", "content": "please retry me"},
+                },
+            ],
+        )
+
+        envelope = export_claude_code_tree([path], room="loft")
+        by_id = {node["native_node_id"]: node for node in envelope["nodes"]}
+
+        self.assertEqual("event", by_id["failed-user"]["kind"])
+        self.assertEqual("user:phone-failed-attempt", by_id["failed-user"]["source_type"])
+        self.assertNotIn("message", by_id["failed-user"])
+        self.assertEqual("message", by_id["delivered-user"]["kind"])
+
     def test_successful_retry_without_stop_hook_still_follows_the_error(self) -> None:
         path = self.root / "retry-at-end.jsonl"
         write_jsonl(
