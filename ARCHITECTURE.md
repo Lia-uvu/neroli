@@ -88,9 +88,10 @@ MCP 暴露。三条读取都不写数据库、不跑模型。
 - 改动时守住这条线：新代码若让一个模块去 import 另一个模块，多半是逻辑放错了层。
 - **卡可见性谓词**（room viewer 隐私规则）住在存储层 `db.card_visible_clause`，Search / Context /
   Midlayer 共用同一条——隐私规则今后只改这一处。
-- `mcp_server.py` 是 Search 的只读 transport adapter：viewer 在 server 启动时固定，工具 schema
-  不接受 viewer/room；数据库以 `mode=ro` + `query_only` 打开，只复用 `retrieval` 的关键词、
-  Card detail 和 session siblings，不开放 raw turns、semantic/model-backed search 或写接口。
+- `mcp_server.py` 是 Search 的只读 transport adapter：工具 schema 显式接受调用者声明的 viewer；
+  可选启动参数只作兼容默认值。数据库以 `mode=ro` + `query_only` 打开，复用 `retrieval` 的关键词、
+  Card detail、同房 raw turns、recent、wander 和 session around/before；不开放 semantic/model-backed
+  search、history 整树或写接口。
 - Midlayer 内部 `curator → treesnap` 属本模块内依赖（允许）。curator 导出到工作台的 `recall`
   wrapper 是独立入口脚本、在工作台里 import Search 门面（`retrieval`），属工具面而非模块跨 import。
 

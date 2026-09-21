@@ -459,11 +459,33 @@ def session_siblings(conn: sqlite3.Connection, card_id: str, viewer: str | None 
         f"""
         SELECT card_id FROM cards
         WHERE session_id = ? AND {visible_clause}
-        ORDER BY COALESCE(turn_start, 0), timestamp
+        ORDER BY COALESCE(turn_start, 0), timestamp, card_id
         """,
         [base.session_id, *visible_params],
     ).fetchall()
     return [d for r in rows if (d := card_detail(conn, r["card_id"], viewer=viewer))]
+
+
+def session_before(
+    conn: sqlite3.Connection,
+    card_id: str,
+    limit: int | None = None,
+    viewer: str | None = None,
+) -> list[CardDetail] | None:
+    """同 session 中锚点之前的可见卡，按叙事顺序；None 表示锚点不可见。
+
+    ``limit=None`` 返回此前全部可见卡。锚点本身不包含在结果里。
+    """
+    if limit is not None and limit < 1:
+        raise ValueError("limit must be at least 1 or None")
+    siblings = session_siblings(conn, card_id, viewer=viewer)
+    if siblings is None:
+        return None
+    anchor = next(i for i, card in enumerate(siblings) if card.card_id == card_id)
+    preceding = siblings[:anchor]
+    if limit is not None:
+        preceding = preceding[-limit:]
+    return preceding
 
 
 def wander(conn: sqlite3.Connection, limit: int = 3, viewer: str | None = None) -> list[CardRef]:
@@ -583,14 +605,27 @@ def _main() -> None:
     ap.add_argument("--card", metavar="ID", help="展开一张卡的全文")
     ap.add_argument("--turns", action="store_true", help="配合 --card：附上原始对话全文（仅同房间的卡）")
     ap.add_argument("--around", action="store_true", help="配合 --card：列同 session 的前后卡片")
+    ap.add_argument("--before", nargs="?", const="all", metavar="N|all",
+                    help="配合 --card：列同 session 此前 N 张卡；省略 N 或写 all 列全部")
     ap.add_argument("--sem", action="store_true", help="语义检索（向量相似度），关键词失手时用")
     ap.add_argument("--wander", nargs="?", const=3, type=int, metavar="N",
                     help="随手翻 N 张冷卡（默认 3，偏向没被翻过的旧卡）")
-    ap.add_argument("--expand", type=int, metavar="N", help="搜索后自动展开前 N 条命中的全文（计取用）")
+    ap.add_argument("--expand", type=int, metavar="N",
+                    help="搜索、wander 或 --before 后自动展开前 N 张卡的全文（计取用）")
     ap.add_argument("--time", nargs="+", metavar="DATE", help="时间范围 START [END]")
     ap.add_argument("--since")
     ap.add_argument("--until")
     args = ap.parse_args()
+    before_limit = None
+    if args.before is not None and args.before != "all":
+        try:
+            before_limit = int(args.before)
+        except ValueError:
+            ap.error("--before 需要正整数或 all")
+        if before_limit < 1:
+            ap.error("--before 需要正整数或 all")
+    if args.before is not None and not args.card:
+        ap.error("--before 需要配合 --card ID")
     conn = connect()
 
     if args.top:
@@ -617,8 +652,28 @@ def _main() -> None:
                 mark = "→" if s.card_id == d.card_id else " "
                 rng = f"R{s.turn_start}–R{s.turn_end}" if s.turn_start is not None else "R?"
                 print(f"{mark} 📄 {s.card_id}  {s.local_time}  {rng}  {s.headline}")
+        if args.before is not None:
+            previous = session_before(conn, args.card, limit=before_limit, viewer=args.viewer) or []
+            scope = "全部" if before_limit is None else f"最近 {before_limit} 张"
+            print(f"\n── 同 session 此前卡片（{scope}，找到 {len(previous)} 张；远→近）──")
+            for s in previous:
+                rng = f"R{s.turn_start}–R{s.turn_end}" if s.turn_start is not None else "R?"
+                print(f"📄 {s.card_id}  {s.local_time}  {rng}  {s.headline}")
+            expand_count = args.expand or 0
+            for s in previous[-expand_count:] if expand_count else []:
+                _log_access(conn, s.card_id, args.viewer)
+                print()
+                _print_card_detail(conn, s, args.viewer, show_turns=False)
     elif args.wander is not None:
-        _print_cards(wander(conn, limit=args.wander, viewer=args.viewer))
+        hits = wander(conn, limit=args.wander, viewer=args.viewer)
+        _print_cards(hits)
+        for ref in hits[: args.expand or 0]:
+            d = card_detail(conn, ref.card_id, viewer=args.viewer)
+            if d is None:
+                continue
+            _log_access(conn, d.card_id, args.viewer)
+            print()
+            _print_card_detail(conn, d, args.viewer, show_turns=False)
     elif args.time:
         since = args.time[0]
         until = args.time[1] if len(args.time) > 1 else None

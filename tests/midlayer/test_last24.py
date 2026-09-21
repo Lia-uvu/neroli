@@ -109,6 +109,7 @@ class Last24RunTest(unittest.TestCase):
         self.assertEqual(results[0]["summary_chars"], 19)
         body = (self.room_dir / "summary-last-24.md").read_text(encoding="utf-8")
         self.assertIn("Sol 根据事件卡整理", body)
+        self.assertNotIn("结果通过提交门复验", body)
         self.assertIn("当前没有遗留步骤", body)
 
     def test_invalid_artifact_and_stdout_are_hard_failure(self):

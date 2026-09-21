@@ -31,19 +31,27 @@ python3 src/retrieval.py --viewer secondary 关键词
 ## Read-only MCP
 
 ```sh
-bin/neroli-mcp.py --db /absolute/path/fragments.db --viewer ROOM
+bin/neroli-mcp.py --db /absolute/path/fragments.db
 ```
 
-这是供 Porch 等 runtime 使用的 stdio MCP server，暴露固定三项工具：
+这是供 Codex、Porch 等 runtime 使用的 stdio MCP 搜索工具箱：
 
-- `neroli_search`：关键词检索，最多 20 条 compact Card refs；
-- `neroli_card`：展开一张可见 Card，单字段最多 12,000 字符；
-- `neroli_session_context`：同 session 有界前后文，最多 30 条 compact refs。
+- `neroli_search`：关键词检索，最多 20 条 Card refs，默认顺手展开前三条；
+- `neroli_card`：展开一张可见 Card；`include_turns=true` 时附同房原始对话；
+- `neroli_session_context`：同 session 的 `around` / `before`，按叙事顺序返回并可批量展开；
+- `neroli_wander`：随机翻出较旧、较少展开的卡，默认三张并展开；
+- `neroli_recent`：按时间范围列卡，默认展开前三条。
 
-viewer 是 server 启动参数，不出现在工具 schema；数据库用 SQLite `mode=ro` 加
-`PRAGMA query_only=ON` 打开。MCP 不暴露 `--turns`、semantic search、history 整树、ingest 或
-Card generation，因此它不会写 `card_access`、不会调用 embedding/model，也不会让模型扩大
-自己的 room 权限。协议与 privacy regression 在 `tests/search/test_mcp_server.py`。
+批量展开最多 5 张；Card 单字段最多 12,000 字符。raw turns 只允许同房 viewer，单条最多
+12,000 字符、单次总计最多 48,000 字符。MCP 的展开保持纯只读，不写 `card_access`；因此
+`wander` 会参考 CLI 的既有取用统计，但 MCP 自己不会把浏览记成新的取用。
+
+各项工具都显式接受 `viewer`，由调用者声明本次检索采用哪个 room 的可见性；未注册的 viewer
+自然只能读取各房间非空的 share。为兼容已有 runtime，server 仍接受可选 `--viewer ROOM` 作为
+省略 tool argument 时的默认值，但显式参数可以覆盖它。数据库用 SQLite `mode=ro` 加
+`PRAGMA query_only=ON` 打开。MCP 不暴露 semantic search、history 整树、ingest 或
+Card generation，因此它不会写 `card_access`、不会调用 embedding/model；viewer 身份本身是
+调用者自觉遵守的边界。协议与 privacy regression 在 `tests/search/test_mcp_server.py`。
 
 ## 本机 History 正文搜索
 
@@ -63,7 +71,9 @@ component 内全部出现（可以分散在多条消息），按 context 折叠�
 ## 一次调用拿全（agent 用户的回合经济）
 
 - `关键词 --expand N`：搜完自动展开前 N 条命中全文（每张计一笔 card_access）。
+- `--wander N --expand N`：列出冷卡后自动展开前 N 张全文；仅实际展开的卡计入 `card_access`。
 - `--card ID --around`：列同 session 全部卡（turn 区间＋当前卡标记），可见性同 card_visible_clause。
+- `--card ID --before N|all [--expand M]`：从锚点向前列同 session 最近 N 张或全部卡（按叙事顺序，不含锚点）；`--expand M` 顺手展开其中最近 M 张，主库 CLI 对实际展开逐张记 `card_access`。
 - `关键词 --sem`：向量语义检索（`retrieval.semantic_search`）。卡片向量只读 `.emb_cache`（Leiden 建树产物），query 向量缺缓存时打一次 embedding API（settings.embedding）。**隐私**：同房间用全文向量；跨房间只用 headline+share 向量——share 向量由 `scripts/backfill_share_vecs.py` 预热（幂等，nightly 第 3 步补齐新卡），缺向量的卡静默跳过。
 
 ## 匹配语义（2026-07-15 起）

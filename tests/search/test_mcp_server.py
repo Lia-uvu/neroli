@@ -6,7 +6,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
@@ -76,6 +75,36 @@ class NeroliMcpServerTest(unittest.TestCase):
                 session="other",
             ),
         )
+        writable.execute(
+            """
+            INSERT INTO messages
+            (source_uuid, role, speaker, text, timestamp, source)
+            VALUES ('den-message-1', 'user', 'Lia', '原始的礼物对话',
+                    '2026-08-03T10:00:00Z', 'test')
+            """
+        )
+        writable.execute(
+            """
+            INSERT INTO turns
+            (session_id, source_uuid, round, message_seq, source_file, line_no)
+            VALUES ('session', 'den-message-1', 1, 1, NULL, NULL)
+            """
+        )
+        writable.execute(
+            """
+            INSERT INTO messages
+            (source_uuid, role, speaker, text, timestamp, source)
+            VALUES ('loft-message-1', 'user', 'Lia', 'loft 原始对话',
+                    '2026-08-03T10:00:00Z', 'test')
+            """
+        )
+        writable.execute(
+            """
+            INSERT INTO turns
+            (session_id, source_uuid, round, message_seq, source_file, line_no)
+            VALUES ('other', 'loft-message-1', 1, 1, NULL, NULL)
+            """
+        )
         db.insert_card(
             writable,
             card(
@@ -94,8 +123,8 @@ class NeroliMcpServerTest(unittest.TestCase):
         self.conn.close()
         self.tmp.cleanup()
 
-    def call(self, name: str, arguments: dict) -> dict:
-        result = mcp_server.call_tool(self.conn, "den", name, arguments)
+    def call(self, name: str, arguments: dict, *, default_viewer: str | None = None) -> dict:
+        result = mcp_server.call_tool(self.conn, default_viewer, name, arguments)
         if result.get("isError"):
             return result
         return json.loads(result["content"][0]["text"])
@@ -104,7 +133,7 @@ class NeroliMcpServerTest(unittest.TestCase):
         with self.assertRaises(sqlite3.OperationalError):
             self.conn.execute("DELETE FROM cards")
 
-    def test_viewer_is_not_a_tool_argument_and_private_stays_room_local(self) -> None:
+    def test_caller_supplies_viewer_and_private_stays_room_local(self) -> None:
         listed = mcp_server.dispatch(
             self.conn,
             "den",
@@ -115,25 +144,61 @@ class NeroliMcpServerTest(unittest.TestCase):
             for tool in listed["result"]["tools"]
             if tool["name"] == "neroli_search"
         )
-        self.assertNotIn("viewer", search_schema["properties"])
+        self.assertIn("viewer", search_schema["properties"])
+        self.assertIn("viewer", search_schema["required"])
         self.assertNotIn("room", search_schema["properties"])
+        self.assertEqual(
+            {tool["name"] for tool in listed["result"]["tools"]},
+            {
+                "neroli_search",
+                "neroli_card",
+                "neroli_session_context",
+                "neroli_wander",
+                "neroli_recent",
+            },
+        )
 
-        own = self.call("neroli_card", {"card_id": "den#1"})
+        own = self.call("neroli_card", {"viewer": "den", "card_id": "den#1"})
         self.assertEqual(own["private"], "只有 den 能看的细节")
-        shared = self.call("neroli_card", {"card_id": "loft#1"})
+        shared = self.call("neroli_card", {"viewer": "den", "card_id": "loft#1"})
         self.assertEqual(shared["share"], "公开的梧桐")
         self.assertEqual(shared["private"], "")
         hidden = mcp_server.call_tool(
-            self.conn, "den", "neroli_card", {"card_id": "loft#2"}
+            self.conn, None, "neroli_card", {"viewer": "den", "card_id": "loft#2"}
         )
         self.assertTrue(hidden["isError"])
 
+        switched = self.call("neroli_card", {"viewer": "loft", "card_id": "loft#1"})
+        self.assertEqual(switched["private"], "隐藏的秘密")
+
+        outsider = self.call("neroli_card", {"viewer": "workshop", "card_id": "loft#1"})
+        self.assertEqual(outsider["share"], "公开的梧桐")
+        self.assertEqual(outsider["private"], "")
+
+        with_turns = self.call(
+            "neroli_card",
+            {"viewer": "den", "card_id": "den#1", "include_turns": True},
+        )
+        self.assertEqual(with_turns["turns"][0]["text"], "原始的礼物对话")
+
+        cross_room_turns = self.call(
+            "neroli_card",
+            {"viewer": "den", "card_id": "loft#1", "include_turns": True},
+        )
+        self.assertIsNone(cross_room_turns["turns"])
+        self.assertIn("same-room", cross_room_turns["turns_unavailable"])
+
     def test_search_and_session_context_are_bounded(self) -> None:
-        hits = self.call("neroli_search", {"query": "礼物", "limit": 4})
+        hits = self.call(
+            "neroli_search",
+            {"viewer": "den", "query": "礼物", "limit": 4, "expand": 1},
+        )
         self.assertEqual([item["card_id"] for item in hits["cards"]], ["den#1"])
+        self.assertEqual(hits["expanded_cards"][0]["private"], "只有 den 能看的细节")
 
         context = self.call(
-            "neroli_session_context", {"card_id": "den#2", "limit": 2}
+            "neroli_session_context",
+            {"viewer": "den", "card_id": "den#2", "limit": 2},
         )
         self.assertEqual(context["total_cards"], 2)
         self.assertEqual(
@@ -141,24 +206,72 @@ class NeroliMcpServerTest(unittest.TestCase):
             ["den#1", "den#2"],
         )
         self.assertTrue(context["cards"][1]["selected"])
+        self.assertEqual(
+            [item["card_id"] for item in context["expanded_cards"]],
+            ["den#1", "den#2"],
+        )
+
+        before = self.call(
+            "neroli_session_context",
+            {
+                "viewer": "den",
+                "card_id": "den#2",
+                "direction": "before",
+                "limit": 1,
+                "expand": 1,
+            },
+        )
+        self.assertEqual([item["card_id"] for item in before["cards"]], ["den#1"])
+        self.assertEqual(
+            [item["card_id"] for item in before["expanded_cards"]], ["den#1"]
+        )
+
+    def test_wander_and_recent_can_expand_results(self) -> None:
+        wandered = self.call(
+            "neroli_wander", {"viewer": "den", "limit": 2, "expand": 2}
+        )
+        self.assertEqual(len(wandered["cards"]), 2)
+        self.assertEqual(len(wandered["expanded_cards"]), 2)
+
+        recent = self.call(
+            "neroli_recent",
+            {
+                "viewer": "den",
+                "since": "2026-08-01",
+                "until": "2026-08-04",
+                "limit": 10,
+                "expand": 1,
+            },
+        )
+        self.assertEqual(recent["count"], 3)
+        self.assertEqual(len(recent["expanded_cards"]), 1)
 
     def test_invalid_arguments_return_structured_tool_error(self) -> None:
         result = mcp_server.call_tool(
             self.conn,
             "den",
             "neroli_search",
-            {"query": "x", "viewer": "loft"},
+            {"viewer": "den", "query": "x", "unexpected": True},
         )
         self.assertTrue(result["isError"])
         self.assertIn("unknown arguments", result["content"][0]["text"])
 
-    def test_viewer_must_be_configured(self) -> None:
-        with patch.object(mcp_server, "ROOMS", ("den", "loft")), patch.object(
-            mcp_server, "ROOM_SLUGS", {"den": "den", "loft": "loft"}
-        ):
-            self.assertEqual(mcp_server.validate_viewer("den"), "den")
-            with self.assertRaisesRegex(ValueError, "unknown Neroli viewer"):
-                mcp_server.validate_viewer("unknown")
+    def test_startup_viewer_is_only_a_compatibility_default(self) -> None:
+        inherited = self.call("neroli_card", {"card_id": "den#1"}, default_viewer="den")
+        self.assertEqual(inherited["private"], "只有 den 能看的细节")
+
+        overridden = self.call(
+            "neroli_card",
+            {"viewer": "loft", "card_id": "loft#1"},
+            default_viewer="den",
+        )
+        self.assertEqual(overridden["private"], "隐藏的秘密")
+
+        missing = mcp_server.call_tool(
+            self.conn, None, "neroli_card", {"card_id": "den#1"}
+        )
+        self.assertTrue(missing["isError"])
+        self.assertIn("viewer must be", missing["content"][0]["text"])
 
 
 if __name__ == "__main__":

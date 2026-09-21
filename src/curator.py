@@ -67,7 +67,7 @@ _RECALL_TEMPLATE = '''#!/usr/bin/env python3
 
 view.db 已按房间过滤过（不可见卡不在库里、他房 private 已置空），所以 viewer=None——
 无需再过滤。子命令：search（默认，--expand N 直接展开前 N 条命中）/ --top /
---cluster ID / --card ID [--around 列同 session 卡] / --time START [END]。
+--cluster ID / --card ID [--around 列同 session 卡] [--before N|all] / --time START [END]。
 """
 import sqlite3
 import sys
@@ -122,11 +122,23 @@ def main():
     ap.add_argument("--cluster", metavar="ID", help="展开一个社区的时间线")
     ap.add_argument("--card", metavar="ID", help="展开一张卡的全文")
     ap.add_argument("--around", action="store_true", help="配合 --card：列同 session 的前后卡片")
-    ap.add_argument("--expand", type=int, metavar="N", help="搜索后自动展开前 N 条命中的全文")
+    ap.add_argument("--before", nargs="?", const="all", metavar="N|all",
+                    help="配合 --card：列同 session 此前 N 张卡；省略 N 或写 all 列全部")
+    ap.add_argument("--expand", type=int, metavar="N", help="搜索或 --before 后自动展开前 N 张全文")
     ap.add_argument("--time", nargs="+", metavar="DATE", help="时间范围 START [END]")
     ap.add_argument("--since")
     ap.add_argument("--until")
     args = ap.parse_args()
+    before_limit = None
+    if args.before is not None and args.before != "all":
+        try:
+            before_limit = int(args.before)
+        except ValueError:
+            ap.error("--before 需要正整数或 all")
+        if before_limit < 1:
+            ap.error("--before 需要正整数或 all")
+    if args.before is not None and not args.card:
+        ap.error("--before 需要配合 --card ID")
     conn = _conn()
     if args.top:
         retrieval._print_communities(retrieval.top_communities(conn))
@@ -151,6 +163,17 @@ def main():
                 mark = "→" if s.card_id == d.card_id else " "
                 rng = f"R{{s.turn_start}}–R{{s.turn_end}}" if s.turn_start is not None else "R?"
                 print(f"{{mark}} 📄 {{s.card_id}}  {{s.local_time}}  {{rng}}  {{s.headline}}")
+        if args.before is not None:
+            previous = retrieval.session_before(conn, args.card, limit=before_limit) or []
+            scope = "全部" if before_limit is None else f"最近 {{before_limit}} 张"
+            print(f"\\n── 同 session 此前卡片（{{scope}}，找到 {{len(previous)}} 张；远→近）──")
+            for s in previous:
+                rng = f"R{{s.turn_start}}–R{{s.turn_end}}" if s.turn_start is not None else "R?"
+                print(f"📄 {{s.card_id}}  {{s.local_time}}  {{rng}}  {{s.headline}}")
+            expand_count = args.expand or 0
+            for s in previous[-expand_count:] if expand_count else []:
+                print()
+                _detail(s)
     elif args.time:
         since = args.time[0]
         until = args.time[1] if len(args.time) > 1 else None

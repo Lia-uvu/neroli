@@ -2,15 +2,17 @@
 
 守：多词查询 AND 优先/OR 补位、查询侧子词展开对齐索引分词、FTS 命中带
 上下文片段（CardRef.why）、tag 命中标明来源、private 不参与跨房间匹配、
-session_siblings 的顺序与可见性、wander 的冷卡优先。
+session_siblings/session_before 的顺序与可见性、wander 的冷卡优先。
 
 语义检索（semantic_search）依赖 .emb_cache / embedding API，不在此覆盖——
 它的隐私分路（跨房间只用 share 向量）靠 code review 和 skills/ops/search.md 守。
 """
+import io
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
@@ -101,6 +103,7 @@ class SessionSiblingsTest(unittest.TestCase):
         self.conn, self.path = _tmp_conn()
         db.insert_card(self.conn, _card("a#2", headline="后半场", turns=(3, 4)))
         db.insert_card(self.conn, _card("a#1", headline="前半场", turns=(1, 2)))
+        db.insert_card(self.conn, _card("a#0", headline="开场", turns=(0, 0)))
         db.insert_card(self.conn, _card("b#1", headline="他房无share", share="", room="roomB", session="s3", turns=(1, 2)))
         db.insert_card(self.conn, _card("b#2", headline="他房有share", share="s", room="roomB", session="s3", turns=(3, 4)))
         self.conn.commit()
@@ -111,12 +114,42 @@ class SessionSiblingsTest(unittest.TestCase):
 
     def test_turn_order_includes_self(self):
         sibs = retrieval.session_siblings(self.conn, "a#2", viewer="roomA")
-        self.assertEqual([s.card_id for s in sibs], ["a#1", "a#2"])
+        self.assertEqual([s.card_id for s in sibs], ["a#0", "a#1", "a#2"])
+
+    def test_before_is_exclusive_limits_nearest_and_returns_in_story_order(self):
+        latest = retrieval.session_before(self.conn, "a#2", limit=1, viewer="roomA")
+        self.assertEqual([s.card_id for s in latest], ["a#1"])
+        all_previous = retrieval.session_before(self.conn, "a#2", viewer="roomA")
+        self.assertEqual([s.card_id for s in all_previous], ["a#0", "a#1"])
+
+    def test_before_rejects_nonpositive_limit(self):
+        with self.assertRaises(ValueError):
+            retrieval.session_before(self.conn, "a#2", limit=0, viewer="roomA")
+
+    def test_card_before_expand_opens_nearest_cards_and_logs_them(self):
+        stdout = io.StringIO()
+        argv = ["recall", "--card", "a#2", "--before", "all", "--expand", "1",
+                "--viewer", "roomA"]
+        with mock.patch.object(sys, "argv", argv), \
+             mock.patch.object(db, "connect", return_value=self.conn), \
+             mock.patch("sys.stdout", stdout):
+            retrieval._main()
+        output = stdout.getvalue()
+        self.assertIn("📄 a#0", output)
+        self.assertIn("📄 a#1", output)
+        self.assertIn("== a#1 ==", output)
+        self.assertNotIn("== a#0 ==", output)
+        logged = [r["card_id"] for r in self.conn.execute(
+            "SELECT card_id FROM card_access ORDER BY rowid"
+        ).fetchall()]
+        self.assertEqual(logged, ["a#2", "a#1"])
 
     def test_cross_room_filters_shareless_siblings(self):
         sibs = retrieval.session_siblings(self.conn, "b#2", viewer="roomA")
         self.assertEqual([s.card_id for s in sibs], ["b#2"])  # b#1 无 share，不该露
         self.assertIsNone(retrieval.session_siblings(self.conn, "b#1", viewer="roomA"))
+        self.assertEqual(retrieval.session_before(self.conn, "b#2", viewer="roomA"), [])
+        self.assertIsNone(retrieval.session_before(self.conn, "b#1", viewer="roomA"))
 
 
 class WanderTest(unittest.TestCase):

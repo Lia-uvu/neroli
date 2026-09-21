@@ -231,8 +231,7 @@ def _write_summary(room: str, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         f"# 最近24小时小结（更新至 {now}）\n\n"
-        f"> {summary_agent_name()} 根据事件卡整理；需要时可用 recall 核实；"
-        "结果通过提交门复验\n\n"
+        f"> {summary_agent_name()} 根据事件卡整理；需要时可用 recall 核实\n\n"
         f"{body}\n",
         encoding="utf-8",
     )

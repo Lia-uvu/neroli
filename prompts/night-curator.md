@@ -44,7 +44,7 @@ digest建议使用第三人称，这是只给你自己看的东西，不用紧�
 **探索预算：`./recall` 调用不超过 10 次。** 挑最值得看的下钻，不要地毯式翻。
 - `./recall`：检索工具，指向本工作台的 `view.db`。下钻用：
   - `./recall --top` / `./recall --cluster <ID>` / `./recall <关键词>` / `./recall --card <ID>` / `./recall --time <起> [止]`
-  - 省调用次数的用法：`./recall <关键词> --expand 3`（搜完直接展开前 3 张全文，只算一次调用）；`./recall --card <ID> --around`（列同 session 前后卡片，重建当天叙事）
+  - 省调用次数的用法：`./recall <关键词> --expand 3`（搜完直接展开前 3 张全文，只算一次调用）；`./recall --card <ID> --around`（列同 session 前后卡片）；`./recall --card <ID> --before 5 --expand 3`（向前列 5 张并展开最近 3 张，`5` 可换成 `all`）
   - 工作台 wrapper 只支持上面列出的参数；部署方房间入口若另有扩展参数，不要在这里调用
 </tools>
 

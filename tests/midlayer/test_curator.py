@@ -61,6 +61,12 @@ class ParseTest(unittest.TestCase):
         self.assertIn('types.ModuleType("jieba")', curator._RECALL_TEMPLATE)
         self.assertIn('sys.modules["jieba"]', curator._RECALL_TEMPLATE)
 
+    def test_recall_wrapper_supports_session_before_expand(self):
+        self.assertIn('ap.add_argument("--before"', curator._RECALL_TEMPLATE)
+        self.assertIn("retrieval.session_before", curator._RECALL_TEMPLATE)
+        self.assertIn("previous[-expand_count:] if expand_count else []", curator._RECALL_TEMPLATE)
+        compile(curator._RECALL_TEMPLATE.format(src=str(ROOT / "src")), "<recall-wrapper>", "exec")
+
 
 class WritebackTest(unittest.TestCase):
     def test_ops_and_render(self):
