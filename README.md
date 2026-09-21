@@ -1,87 +1,101 @@
 # Neroli
-Neroli is a memory infrastructure for long-term AI companions, built on graph-based retrieval. It generates memory cards through the agent's own persona rather than neutral extraction. Time is a first-class citizen: cards stay anchored to when things happened, and recent context takes a separate path from long-term structure. The long-term index clusters cards by event into a hierarchical topic tree and presents information at multiple resolutions — agents dynamically choose the level of detail they need at query time. Per-agent privacy boundaries are enforced over a shared archive.
 
-## How It Works
-[LLMs operate fundamentally through persona simulation](https://www.anthropic.com/research/persona-selection-model), so rather than judging what to remember from the outside, Neroli lets the agent inhabit its own identity and context, and decide for itself what matters. Without access to an LLM's internal runtime state, external memory has a hard ceiling — persona-driven generation is one way to approximate what the agent would natively retain, if it could.
+English | [中文](README.zh-CN.md)
 
-```txt
-conversation logs
-  → messages / turns
-      └──→ DB turns watermark → daytime Card Gen (source-independent)
-            └──→ event cards (shared / private, per-agent room)
-                  │
-                  ├──→ cards-last-24        (recent headlines, FIFO)
-                  │      └──→ summary agent + recall → summary-last-24 (≤700 chars, verified submit)
-                  │
-                  └──→ entity resolution    (tags → canonical entities)
-                        → weighted graph    (co-occurrence + embedding edges)
-                        → recursive Leiden  (hierarchical topic communities)
-                              │
-                              └──→ curator agent reads tree-change report
-                                    → digest.md      (tree projection, hard budget)
-                                    → constants.md   (long-lived facts)
+**A local-first long-term memory engine for AI agents**
+
+Neroli turns conversations from multiple sources into durable, time-anchored event Cards, allowing AI agents to carry context across sessions without reloading entire chat histories. It is a working systems project focused on reliable memory pipelines, multi-resolution retrieval, explicit privacy boundaries, and replaceable components.
+
+## Engineering highlights
+
+- **Durable multi-source memory.** Source adapters normalize logs from different runtimes into immutable conversation trees and ordered turns. A rolling generation pipeline turns them into narrative event Cards with time, provenance, tags, and viewer-scoped shared/private content. Cards are then organized into natural event lines, so recall can expand one topic into its complete development over time.
+- **Dual-axis retrieval.** Full-text search and chronological context form one axis; a hierarchical event graph built from embeddings, entity co-occurrence, and recursive Leiden community detection forms the other. An agent can search horizontally by keyword or time, or drill from a top-level community into one event line and walk its Card timeline.
+- **Fault-tolerant LLM pipelines.** Model output is staged and structurally validated before atomically replacing existing memory. Every physical attempt is audited independently, and malformed or empty responses preserve the last valid result.
+- **Decoupled, testable architecture.** Seven modules exchange data through a versioned SQLite contract. Background processing is source-independent, visibility filtering is centralized in storage, MCP exposes only bounded read-only operations, and **144 automated tests** protect key behavior.
+
+## System shape
+
+```text
+source adapters
+  -> immutable conversation tree + observations
+  -> messages / ordered turns
+  -> event Cards (headline, narrative, time, provenance, visibility)
+       |-> FTS + timeline retrieval
+       |-> canonical entities
+       |-> weighted Card graph
+       |-> adaptive recursive Leiden hierarchy
+       |-> recent and long-horizon context projections
+  -> viewer-bound CLI / read-only MCP consumers
 ```
-Storage and index are separate layers. Cards hold the full narrative and privacy markings; the index is a derivative structure that organizes and locates cards, and can be rebuilt from them at any time. A short-context agent condenses recent card headlines and can open the filtered source cards before submitting. A nightly curator inhabits each agent's persona in turn, reads the tree-change report, and rewrites that agent's longer-horizon context.
 
-For agent runtimes, `bin/neroli-mcp.py` exposes three bounded read-only MCP tools for keyword search,
-Card detail, and surrounding Cards. The caller fixes the viewer when starting the server; the model
-cannot choose a room, request raw turns, write memory, or trigger model-backed retrieval through this
-surface. See [the Search operations guide](skills/ops/search.md#read-only-mcp).
+Event Cards are the durable memory layer. FTS tables, entity mappings, graph communities, and generated context files are rebuildable derived views. Storage and indexing are separate, so an indexing experiment can fail, drift, or be replaced without damaging the narrative memory itself.
 
-## Quick Start
-There is no setup wizard. You hand [`skills/install/SKILL.md`](skills/install/SKILL.md) to your coding agent (Claude Code, Codex CLI, …) and it does the install: a three-question interview (privacy boundary, model access, existing archives), config filled on your behalf, a checkpoint after every stage, platform-native scheduling. The mechanical steps are prefab scripts (`bin/preflight.sh`, `bin/make-launchd.sh`); the agent's job is the judgment work — your boundary, your persona, your harness.
+The canonical store is one SQLite database. Modules exchange data through the persisted schema rather than importing one another; only the top-level orchestration layer composes them.
 
-**Everything that costs money ships off.** First ingest is free and model-less; card generation and the night curator are switches the installer must ask you to flip, with the cost stated first.
+## Selected design decisions
 
-## Real Instance
-```txt
-agents-yard/
-├── bedrock/
-│   └── neroli/                 shared memory engine + data
-│
-├── den/                        Room A — Claude Opus
-│   ├── cards-last-24.md
-│   ├── summary-last-24.md
-│   ├── digest.md
-│   ├── constants.md
-│   ├── toolbox/                room's own tools (diary, todo, mail…)
-│   └── slot/                   ← inter-room message box
-│
-├── loft/                       Room B — Claude Fable
-│   ├── cards-last-24.md
-│   ├── summary-last-24.md
-│   ├── digest.md
-│   ├── constants.md
-│   ├── toolbox/
-│   └── slot/                   ← inter-room message box
-│
-└── shed/                       shared tools (search, printer, notifications…)
+### Keep the event boundary plastic at the tail
+
+Fixed windows easily cut through the middle of an event. Neroli freezes stable Cards, but re-feeds and rewrites the newest Card when more turns arrive. Existing memory is deleted only after a complete replacement parses successfully, so malformed or empty model output cannot erase a valid result.
+
+### Accept multiple sources and support custom adapters
+
+Neroli can ingest raw JSON/JSONL files from supported sources without requiring users to reshape their history first. To connect another chat platform or agent runtime, developers can implement a source adapter that translates native records into Neroli's public conversation-tree or normalized contract; Card generation, indexing, retrieval, and context generation remain unchanged.
+
+### Let local structure determine graph depth
+
+Each event Card becomes a graph node. Edges combine mean-centered embedding neighbors with rare-entity co-occurrence. Leiden recurses inside each community only when local modularity exceeds a degree-preserving null-model baseline. Coherent regions can remain broad while heterogeneous regions naturally grow deeper levels.
+
+### Agents do not receive the primary database by default
+
+Each Card belongs to an agent workspace and separates shared from private text. By default, an agent receives viewer-filtered context or a bounded read-only retrieval interface—not the primary database. The nightly Curator also runs only inside a filtered workbench copy: invisible Cards are absent, and private fields on visible foreign Cards are blank. Search, recent context, tree snapshots, and Curator exports share the same storage-level visibility rule.
+
+## Modules and tests
+
+The data pipeline is split into seven explicit modules:
+
+- **Ingest** receives multiple sources and stores raw messages, ordered turns, and the conversation tree.
+- **History** renders and browses original conversations from the conversation tree.
+- **Card Gen** turns newly ingested turns into narrative event Cards.
+- **Index** resolves entities, builds the graph, and produces the recursive Leiden event hierarchy.
+- **Context** generates recent context that can be injected directly into an agent session.
+- **Midlayer** maintains longer-horizon digests and constants over the event hierarchy.
+- **Search** provides keyword, time, event-line, and source-text drill-down over those data layers.
+
+Every module has its own automated test coverage, with additional cross-module tests protecting public contracts.
+
+## Design history
+
+Neroli did not begin with its current graph architecture. Early versions explored absolute embedding thresholds, centroid assignment, overlap signals, and several approaches to short- and long-horizon context before narrative storage and retrieval indexing were separated.
+
+The public design history consists of translated, privacy-edited editions of two private working documents. They preserve the experiments, rejected alternatives, and decision sequence while removing personal conversation material:
+
+- [Design history index](DESIGN-HISTORY/README.md)
+- [v1: Event memory and vector-space clustering](DESIGN-HISTORY/design-v1.html)
+- [v2: Leiden graph index and Midlayer](DESIGN-HISTORY/design-leiden-v2.html)
+
+They explain how the system arrived here; they are not specifications for current behavior. Current facts are defined by the architecture, schema, code, and tests.
+
+## Repository guide
+
+- [Technical overview](TECHNICAL-OVERVIEW.md) — implemented design and algorithms
+- [Architecture](ARCHITECTURE.md) — module ownership, data flow, and boundaries
+- [SQLite schema](schema.md) — persisted structure and migrations
+- [Source adapter boundary](docs/source-adapter-boundary.md) — source facts versus Neroli policy
+- [Conversation-tree contract](docs/conversation-tree-adapter-contract.md) — canonical nodes, parents, and observations
+- [Normalized adapter contract](docs/normalized-adapter-contract.md) — compatibility contract for linear sources
+- [Operations index](skills/ops/SKILL.md) — module-owned runbooks
+
+## Running it
+
+Installation uses an agent-assisted workflow rather than a fixed setup wizard. Give [`skills/install/SKILL.md`](skills/install/SKILL.md) to a coding agent; it performs preflight checks, asks for the deployment's privacy and model choices, fills private configuration, and verifies each checkpoint. Tasks that incur model cost ship disabled and must be enabled explicitly.
+
+Run the full test suite with:
+
+```sh
+python3 -m unittest discover -s tests -v
 ```
-Each directory is a room, and each file is an object in it — the folder structure is a text-based mapping of a living space. An agent's room is its living space — everything it has written, built, and accumulated stays between sessions. It walks back in and continues where it left off. slot/ is used for inter-room communication. shed/ holds shared utilities.
-
-The system is iterated on agent feedback, so the primary users of the memory are the agents themselves. 
-
-## Documentation
-- [ARCHITECTURE.md](ARCHITECTURE.md) — module map, data flow, boundary rules
-- [skills/ops/SKILL.md](skills/ops/SKILL.md) — operations skill and index ("what do I edit to change X")
-- [docs/source-adapter-boundary.md](docs/source-adapter-boundary.md) — what source adapters own, what Neroli owns, and the current tree boundary
-- [docs/normalized-adapter-contract.md](docs/normalized-adapter-contract.md) — source adapter contract, canonical identity, ordering, and local room policy
-- [docs/conversation-tree-adapter-contract.md](docs/conversation-tree-adapter-contract.md) — incremental node/parent tree contract with rendering-only observations
-- [skills/ops/search.md](skills/ops/search.md) — retrieval CLI and the read-only MCP surface
-- [schema.md](schema.md) — SQLite schema v15 reference
-
-## FAQ
-**Where does my data go?**
-Nowhere. Everything is local files and one SQLite database. Model calls go to whatever provider *you* configure (a local CLI, your API key, or Ollama); nothing else leaves the machine.
-
-**What does it cost to run?**
-Ingest and retrieval are free (no model calls). Card generation is roughly one small model call per ~14 conversation rounds; the night curator is at most one agentic call per room per night, skipped when nothing new happened. All of it ships disabled until you turn it on.
-
-**What models does it need?**
-One chat model for cards (any OpenAI-compatible API, CLI, or Ollama), one embedding model (API or Ollama), and — only if you enable the night curator — an agentic CLI that can write its working directory (codex is the tested default). Memory generation requires real reasoning (the model needs to understand when you're joking, what actually mattered, what was throwaway), so use a model close to your main agent's reasoning ability. Recommended: GPT-5.5 low-thinking. The author runs on an OpenAI Go subscription, which roughly covers it — actual cost depends on conversation frequency and length.
-
-**Does it run anywhere?**
-macOS first (launchd scripts included). The engine is plain Python + SQLite and runs on Linux, but the shell helpers use BSD `stat` — adapt before trusting them.
 
 ## License
-Code: [PolyForm Noncommercial 1.0.0](LICENSE). Docs and media: [CC BY-NC-SA 4.0](LICENSE-DOCS.md). For commercial use, get in touch.
+
+Code: [PolyForm Noncommercial 1.0.0](LICENSE). Documentation and media: [CC BY-NC-SA 4.0](LICENSE-DOCS.md).

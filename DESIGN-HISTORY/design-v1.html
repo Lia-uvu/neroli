@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neroli Design History v1 — Event Memory Pipeline</title>
+<style>
+  :root { --bg:#fafaf8; --fg:#1a1a1a; --muted:#6b6b6b; --border:#e0ddd8;
+    --accent:#3d5a80; --detail:#f4f3f0; --deprecated:#f0eeeb; --tag:#e8e6e1; }
+  * { box-sizing:border-box; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; font-size:15px;
+    line-height:1.75; color:var(--fg); background:var(--bg); max-width:800px;
+    margin:0 auto; padding:3rem 2rem 6rem; }
+  h1 { font-size:1.7rem; margin-bottom:.3rem; } h1+p { color:var(--muted); margin-top:0; }
+  h2 { font-size:1.2rem; margin-top:2.8rem; padding-bottom:.3rem; border-bottom:1px solid var(--border); }
+  h3 { font-size:1rem; margin-top:1.6rem; } p { margin:.7rem 0; }
+  nav { margin:2rem 0 2.5rem; } nav ol { padding-left:1.4rem; } nav a { color:var(--accent); text-decoration:none; }
+  code { background:var(--tag); padding:.1em .35em; border-radius:3px; }
+  pre,.diagram { background:var(--detail); padding:1rem 1.2rem; border-radius:4px;
+    overflow:auto; line-height:1.6; white-space:pre; }
+  details { margin:.8rem 0 1rem; padding:.7rem 1rem; background:var(--detail);
+    border-left:3px solid var(--border); border-radius:4px; }
+  summary { cursor:pointer; color:var(--muted); }
+  .decision { margin:1rem 0; padding:.8rem 1rem; border-left:3px solid var(--accent); background:var(--detail); }
+  .label { color:var(--accent); font-size:.78rem; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
+  .history { padding:.9rem 1rem; background:#fff4d6; border:1px solid #ead28d; border-radius:4px; }
+  #deprecated { margin-top:3rem; padding-top:1rem; border-top:2px solid var(--border); }
+  #deprecated details { background:var(--deprecated); }
+  @media(max-width:600px){ body{padding:1.5rem 1rem 4rem} }
+</style>
+</head>
+<body>
+<div class="history"><strong>Historical, privacy-edited edition.</strong> This document was translated
+from private working notes. Personal conversation examples were removed or replaced while the
+experiments, decisions, and rejected paths were preserved. For current behavior, use the
+repository architecture, schema, code, and tests.</div>
+
+<h1>Event Memory Pipeline</h1>
+<p>Conversations disappear from a context window. Memory does not have to disappear with them.
+This document records the first Neroli design: what it tried to preserve, how it generated memory,
+and why its original clustering approach was eventually replaced.</p>
+
+<nav><ol>
+  <li><a href="#principles">Design principles</a></li>
+  <li><a href="#cards">What to remember: event Cards</a></li>
+  <li><a href="#generation">How Cards were generated</a></li>
+  <li><a href="#layers">Four time scales</a></li>
+  <li><a href="#index">Retrieval and clustering experiments</a></li>
+  <li><a href="#privacy">Viewer-specific privacy</a></li>
+  <li><a href="#deprecated">Rejected paths</a></li>
+</ol></nav>
+
+<h2 id="principles">1. Design principles</h2>
+
+<h3>Use physical intuition for boundaries</h3>
+<p>The deployment used spatial language: a room represented an agent workspace, a notebook held
+durable writing, and an alarm represented scheduled work. The metaphor made ownership questions
+concrete: where does an object belong, and who should be able to encounter it by default?</p>
+
+<h3>Remember from an operating context, not as a neutral extractor</h3>
+<p>The earliest prompt treated the model as a mechanical extraction tool. Its output resembled a
+meeting record: correct in outline, but poor at noticing which concrete detail or emotional turn
+would matter later. The replacement framed the task from the remembering agent's operating context:
+the conversation is about to leave the context window; write what should survive.</p>
+<details><summary>What the comparison suggested</summary>
+<p>In A/B experiments, the operating-context prompt produced more stable first-person recollection,
+retained causal texture, and omitted more administrative noise. This did not make the model a policy
+boundary. It changed judgment quality; deterministic code still controlled what material the model
+could receive.</p></details>
+
+<h3>Natural language all the way down</h3>
+<p>Card bodies were prose rather than keyword lists. Prose preserved cause, sequence, and tone; it was
+readable without another decoding layer and behaved more consistently in embedding space than short,
+context-free labels. Tags remained secondary indexing signals rather than the memory itself.</p>
+
+<h2 id="cards">2. What to remember: event Cards</h2>
+<p>The basic unit was an event, not a message and not a fixed-size chunk. One Card represented a span
+that should be recalled as a whole: a decision, an experiment, a routine, a problem, or a short arc
+of related interaction. The model could split a window only when it contained genuinely independent
+event lines.</p>
+
+<pre><code>turns: 15–19
+headline: comparing two deployment options and choosing the reversible one
+share: information useful across agent workspaces
+private: information belonging only to the source workspace
+tags: deployment / rollback / decision</code></pre>
+
+<h3>Shared and private were relational, not topical</h3>
+<div class="decision"><div class="label">Decision</div>
+<p><strong>Shared</strong> meant that another agent could know the material without taking ownership of
+an experience that did not belong to it. <strong>Private</strong> meant that disclosure would cross the
+source workspace's relational boundary. When uncertain, generation chose private.</p></div>
+<p>This distinction was intentionally different from “sensitive versus ordinary.” Some health or
+coordination information may need to be shared for consistent support. Conversely, an apparently
+ordinary phrase or promise may belong only to one relationship history.</p>
+
+<h3>Cross-topic events were not forced apart</h3>
+<p>A single event can connect a project decision, a purchase, and a deadline. Generation should not
+predict every future retrieval angle and split one coherent story into fragments. Multiple cluster
+membership was reserved for the index layer.</p>
+
+<h2 id="generation">3. How Cards were generated</h2>
+
+<h3>One model pass, without pre-compression</h3>
+<div class="diagram">raw conversation turns
+  + agent operating context
+  + frozen Card headlines as prior context
+  -> reasoning model
+  -> one or more narrative event Cards</div>
+<p>A proposed two-model pipeline first compressed the transcript into atomic facts and then asked a
+stronger model to write Cards. Experiments showed that the intermediate representation discarded
+causal and tonal information. Bounded windows made the additional layer unnecessary.</p>
+
+<h3>Activity and time both gated generation</h3>
+<p>Generation did not run on a fixed clock or bind itself to one session. It required both enough new
+turns and enough elapsed time since the previous run. New sessions also had a small minimum-turn gate,
+avoiding a paid call for accidental or extremely short exchanges. Existing sessions could update from
+fewer turns because a small continuation might complete an already meaningful event.</p>
+
+<h3>Freeze/refeed: rewrite the newest Card</h3>
+<div class="diagram">existing Cards:  [A] [B] [C: mutable tail] + new turns
+freeze:          [A] [B]
+re-feed:              end of B + C's turns + new turns
+result:          replace C with one or more revised Cards</div>
+<p>Appending at a mechanical boundary produced half-events and duplicate summaries. Re-feeding the
+tail let the model decide whether the new material continued the last event or opened a new one.
+Stable history remained frozen, bounding both cost and rewrite risk.</p>
+
+<h3>Initial long sessions used the same mechanism</h3>
+<p>A long first session was processed in growing windows. After each successful pass, all but the
+newest Card became stable. The next window began from the previous boundary and included frozen
+headlines as a compact account of what had already been recorded.</p>
+
+<h2 id="layers">4. Four time scales</h2>
+<div class="diagram">profile     = active directory of important themes
+recent      = short FIFO continuity view
+event Cards = expandable narrative records
+clusters    = long-horizon thematic organization</div>
+
+<h3>Profile as a traceable directory</h3>
+<p>The proposal rejected a free-standing model-written “profile of the user.” Such prose was easy to
+generalize beyond its evidence. Instead, the intended profile would compose selected Card headlines,
+leaving every sentence traceable to an event record.</p>
+
+<h3>Recurring background versus episodes</h3>
+<p>Long-lived background could not be selected reliably from one Card. The proposed promotion signal
+combined week span, coverage across weeks, and recency. A concentrated episode would remain recent;
+a pattern recurring across many weeks could become standing context. One-time durable declarations
+were recognized as a separate class that frequency alone could not discover.</p>
+
+<h3>Recent view</h3>
+<p>A deterministic recent file listed visible Card headlines from a configurable lookback window.
+It intentionally omitted Card bodies. The agent received immediate continuity without loading the
+archive or exposing private prose through a broad summary.</p>
+
+<h3>Cards and clusters</h3>
+<p>Cards remained the expandable source of narrative truth. Clusters were an entry point into older
+material: a summary could lead to a dated Card timeline and then to one full Card. Old events were not
+deleted merely because they stopped appearing in the active directory.</p>
+
+<h2 id="index">5. Retrieval and clustering experiments</h2>
+
+<h3>Topic and time were separate axes</h3>
+<p>Vertical retrieval followed one storyline through a cluster timeline. Horizontal retrieval sliced
+all events by time. The design did not need two copies of memory; it needed timestamps to survive every
+projection. Time ordered and filtered events but did not decide topical similarity.</p>
+
+<h3>Initial retrieval stack</h3>
+<ol>
+  <li>Search Card text and tags with FTS.</li>
+  <li>Group hits under cluster summaries.</li>
+  <li>Expand a cluster into a dated Card timeline.</li>
+  <li>Open a Card for its visible narrative and source detail.</li>
+</ol>
+<p>LIKE and source-turn search remained fallbacks. Clustering was an organization mechanism, never the
+only way back to memory.</p>
+
+<h3>Embedding plus entity evidence</h3>
+<p>Semantic similarity handled paraphrase and broad topic resemblance. Weighted entity overlap rescued
+long-running lines whose vocabulary had shifted. Rare concrete entities carried more weight than
+universal names or generic emotional terms.</p>
+
+<details><summary>Why mean-centering was mandatory</summary>
+<p>Raw Card embeddings occupied a narrow, high-cosine region because the corpus shared language and
+background context. In one experiment, raw pairwise cosine values ranged roughly from 0.65 to 0.98
+with a median near 0.80. After subtracting the corpus mean, values spread across roughly -0.33 to 0.89.
+The precise numbers were model-specific; the lesson was that a threshold has no meaning outside the
+scale that produced it.</p></details>
+
+<h3>Co-occurrence instead of a hand-written synonym dictionary</h3>
+<p>Exact tags fragmented when the model used alternate names. Generic dictionaries missed local domain
+terms, while embeddings of isolated tags confused synonymy with loose relatedness. The experiment
+used first-order co-occurrence and similarity between co-occurrence profiles so the corpus could reveal
+which terms behaved alike.</p>
+
+<h3>Centroid plus tail</h3>
+<p>An early assignment rule compared a new Card with both a cluster centroid and the average of its most
+recent Cards. The tail sometimes followed a fast-moving storyline, but mostly helped only within dense
+conversation bursts. It also created the worst accidental bridges. Entity evidence handled cross-session
+continuity more safely, so tail matching was retired.</p>
+
+<h3>Relative thresholds and the magnet-cluster problem</h3>
+<p>Absolute cosine thresholds failed as the corpus became denser. Replacing them with a z-score relative
+to each Card's similarity background was more portable across dense and sparse regions, but did not
+solve the underlying representation problem.</p>
+<div class="decision"><div class="label">Finding</div>
+<p>The “magnet” was not primarily centroid drift. It was a single-link chain: every neighboring pair
+could be plausibly similar while the two ends of the chain were unrelated. Smarter edge definitions
+followed by connected components recreated the same transitive failure. Resistance to chains came from
+aggregate comparison, not from declaring a cleverer pairwise edge.</p></div>
+
+<h3>Local recursive refinement</h3>
+<p>Large groups were recursively reconsidered with local background statistics. This produced a useful
+multi-resolution intuition—zoom into heterogeneous regions—but residual-space experiments often split
+chains arbitrarily. The process exposed a ceiling: continuous distances between Cards were being asked
+to supply discrete structure they did not naturally contain.</p>
+
+<h2 id="privacy">6. Viewer-specific privacy</h2>
+<p>Each Card recorded the workspace that produced it. The owner could read shared and private fields;
+another viewer could read the Card only when it had shared text, and then saw only that shared text.
+The original design embedded full Card context for indexing and filtered at query/display time.</p>
+<details><summary>Why not ask generation to write self-contained shared prose?</summary>
+<p>A shared conclusion may depend on a private cause. Asking the model to hide the cause while making the
+conclusion read smoothly encouraged vague invention. The design kept the original causal context in the
+Card and placed deterministic filtering at the read boundary instead.</p></details>
+<p>The threat model was accidental disclosure inside one trusted local user account, not hostile tenant
+isolation. Later versions strengthened the tool boundary with shared visibility predicates and filtered
+database copies.</p>
+
+<section id="deprecated">
+<h2>7. Rejected paths</h2>
+<details><summary>Fully local low-tier extraction</summary><p>Small local models frequently reconstructed multilingual
+tokens incorrectly, copied examples, and over-classified ordinary text as memorable. The task had a
+real reasoning floor; cost reductions had to come from call frequency and payload size instead.</p></details>
+<details><summary>Instruction-style extraction</summary><p>Mechanical extraction preserved facts but lost salience and
+causal texture. Operating-context generation replaced it.</p></details>
+<details><summary>Keyword or atomic-sentence Cards</summary><p>They embedded poorly and forced later readers to reconstruct
+missing context. Natural-language event prose remained canonical.</p></details>
+<details><summary>Pure embedding clustering</summary><p>It handled local semantic similarity but failed to reconnect
+long arcs. Entity evidence was added, then later moved into the graph.</p></details>
+<details><summary>Global cosine thresholds</summary><p>Both raw and mean-centered versions were brittle under uneven
+density. A threshold that protected one topic region fragmented another.</p></details>
+<details><summary>Local edge rules plus connected components</summary><p>Mutual-kNN and local z-score edges still
+collapsed through single-link transitivity.</p></details>
+<details><summary>Generate standing facts while writing each Card</summary><p>One Card lacked the cross-session view
+needed to distinguish an episode from a durable pattern. Promotion belonged in an aggregation layer.</p></details>
+<details><summary>Knowledge graph as memory storage</summary><p>Entity relations were useful for indexing, but triples could
+not preserve the narrative texture or express Card-level visibility cleanly.</p></details>
+</section>
+</body>
+</html>
