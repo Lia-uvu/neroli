@@ -66,7 +66,7 @@
 
   "entity_resolve": {
     "_comment": "Online entity dedup (merge new tags into existing entities). judge_model is called with small batches; failures degrade softly (tag stays unmerged). cosine_min: candidate screen threshold; top_k candidates shown to the judge; min_df: only tags on >= this many cards get resolved; batch: tags per model call.",
-    "judge_model": "gpt-5.4-mini",
+    "judge_model": "gpt-5.6-luna",
     "cosine_min": 0.6,
     "top_k": 5,
     "min_df": 2,

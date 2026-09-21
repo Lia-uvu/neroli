@@ -5,7 +5,7 @@ tag——如果放任，碎片化会随时间重新长回来。本模块在 rebu
 
   1. 找 card_tags 里 df>=2 但还不在 tag_entity_map 的 tag（自上次以来的新 tag）。
   2. 对每个新 tag 算 embedding，和已有实体的 name_embedding 算 cosine，取 >=0.6 候选。
-  3. 候选非空 → gpt-5.4-mini 判"新 tag 和哪个候选是同一实体，还是都不是"（保守，
+  3. 候选非空 → 配置的轻量模型判"新 tag 和哪个候选是同一实体，还是都不是"（保守，
      错合比错拆代价大）。判定结果写回 tag_entity_map；判为新实体则建 entity（带 embedding）。
   4. 没候选 → 直接建新实体。
 
@@ -32,7 +32,8 @@ from model import _build_codex_cmd_with_effort, build_model, model_attempts
 
 # 阈值与裁判模型都在 settings.entity_resolve；这里的字面量只是缺省。
 _er = load_settings().get("entity_resolve", {})
-JUDGE_MODEL = _er.get("judge_model", "gpt-5.4-mini")
+DEFAULT_JUDGE_MODEL = "gpt-5.6-luna"
+JUDGE_MODEL = _er.get("judge_model", DEFAULT_JUDGE_MODEL)
 COSINE_MIN = _er.get("cosine_min", 0.6)   # candidate threshold (design Stage 2)
 TOP_K = _er.get("top_k", 5)               # max candidates shown to the judge
 MIN_DF = _er.get("min_df", 2)             # lazy promotion: only resolve tags that have recurred

@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from entity_resolve import _parse_judge_output  # noqa: E402
+from entity_resolve import DEFAULT_JUDGE_MODEL, _parse_judge_output  # noqa: E402
 
 
 class EntityJudgeParseTest(unittest.TestCase):
@@ -37,6 +37,13 @@ class EntityJudgeParseTest(unittest.TestCase):
                 '{"tag":"晨间散步","merge_into":null}]',
                 self.ITEMS,
             )
+
+    def test_default_judge_model_matches_example_config(self):
+        import json
+
+        example = json.loads((ROOT / "config" / "settings.example.json").read_text())
+        self.assertEqual(DEFAULT_JUDGE_MODEL, "gpt-5.6-luna")
+        self.assertEqual(example["entity_resolve"]["judge_model"], DEFAULT_JUDGE_MODEL)
 
 
 if __name__ == "__main__":

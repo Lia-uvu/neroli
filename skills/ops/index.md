@@ -22,6 +22,9 @@ bin/cli.py --rebuild-index
 | `knn_k` | 12 | card embedding kNN 候选边数量 |
 | `resolve_entities` | true | 建图前是否把新 tag 折进规范实体（LLM judge，失败软降级） |
 
+实体裁判模型由 `entity_resolve.judge_model` 配置，默认 `gpt-5.6-luna`；它只处理 cosine
+初筛后的短 batch，调用固定使用 low reasoning。
+
 ## 调参（config/settings.json → `embedding`）
 
 embedding 服务于建图的 kNN 边，属于本模块的外部依赖。

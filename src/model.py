@@ -29,7 +29,7 @@ class CLIModel:
     """通过任意 headless CLI 调用模型（如 codex exec / claude -p）。
 
     command 是完整命令行模板，prompt 从 stdin 喂入，回复从 stdout 读取。
-    例：--provider cli --model gpt-5.4-mini
+    例：--provider cli --model gpt-5.6-luna
     订阅制通道可能限流，失败按 30s/60s/120s 退避重试三次。
     """
 

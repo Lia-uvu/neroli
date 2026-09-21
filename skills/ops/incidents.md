@@ -4,6 +4,21 @@
 > 不写下来，下一个 session 的维护者就得重新考古一遍。
 > 日常巡检入口：`bin/status.sh`（只读体检，专抓"该发生的没发生"）。
 
+## 2026-09-18 实体裁判模型失效，索引连续软降级
+
+**症状**：nightly 连续正常收尾，但 `rebuild index` 的 `resolve` 从 9 月 11 日起一直是
+`resolve_failed`；新卡和聚类仍产出，因此表面上系统正常，实际新 tag 没有进入规范实体映射。
+
+**根因**：`entity_resolve.judge_model` 仍指向 `gpt-5.4-mini`，Codex ChatGPT 账户已不支持
+该模型。IDX-001 的失败软降级正确保护了 cards 和既有实体，但也让故障不阻断 nightly。
+
+**修复**：裁判默认与本机配置改为成本敏感的 `gpt-5.6-luna`，保留 low reasoning、完整
+batch 和保守合并门；在线备份后经共享锁重建索引，24 个待决 tag 中 5 个合并、19 个新建，
+待决归零，数据库完整性和全套 143 测通过。
+
+**教训**：`nightly done` 只表示主流程完成，不等于所有软降级模块成功；排障时必须展开
+`rebuild index` 的 `resolve.status`，不能只看进程退出码。
+
 ## 2026-07-12 curator 连续三晚未真正运行
 
 **症状**：digest / constants 停在旧状态好几天（表现为"改名成 neroli 这么大的事 curator 居然没记住"），
