@@ -14,6 +14,7 @@ scripts/archive/
 GIT-MAINTENANCE.local.md
 OPS-JOURNAL.local.md
 bin/alert-local.sh
+TECHNICAL-OVERVIEW.md
 
 # ── runtime output ──
 data/

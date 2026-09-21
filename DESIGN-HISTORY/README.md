@@ -18,5 +18,5 @@ The documents are historical context, not specifications for the current system:
 The sequence matters. Rejected approaches remain here because their failure modes
 explain several otherwise non-obvious properties of the current architecture.
 
-For implemented behavior, use the [technical overview](../TECHNICAL-OVERVIEW.md),
-[architecture](../ARCHITECTURE.md), [schema](../schema.md), code, and tests.
+For implemented behavior, use the [architecture](../ARCHITECTURE.md),
+[schema](../schema.md), code, and tests.

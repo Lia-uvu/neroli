@@ -78,7 +78,6 @@ Neroli 并非一开始就采用现在的图架构。早期版本依次探索过 
 
 ## 仓库导览
 
-- [技术总览](TECHNICAL-OVERVIEW.md) — 当前已经实现的设计和算法
 - [架构](ARCHITECTURE.md) — 模块归属、数据流与边界
 - [SQLite schema](schema.md) — 持久化结构和 migrations
 - [Source adapter boundary](docs/source-adapter-boundary.md) — 来源事实与 Neroli policy 的分界
