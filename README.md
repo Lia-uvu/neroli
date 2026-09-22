@@ -34,9 +34,9 @@ The canonical store is one SQLite database. Modules exchange data through the pe
 
 ## Selected design decisions
 
-### Keep the event boundary plastic at the tail
+### Let Card boundaries follow conversation topics
 
-Fixed windows easily cut through the middle of an event. Neroli freezes stable Cards, but re-feeds and rewrites the newest Card when more turns arrive. Existing memory is deleted only after a complete replacement parses successfully, so malformed or empty model output cannot erase a valid result.
+Long conversations often shift between topics, and a fixed turn window can cut a discussion in half. Neroli freezes settled Cards but re-feeds overlapping turns at the tail and rewrites the newest Card as more conversation arrives. This lets Card boundaries move with a topic as it develops or the conversation changes direction, so each Card can capture a coherent topic arc instead of an arbitrary slice of turns.
 
 ### Accept multiple sources and support custom adapters
 
