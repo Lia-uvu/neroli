@@ -123,6 +123,11 @@ Tree v1 的 observation 只写 `conversation_observations`。验收时记录入�
 `change_watermarks.turns`：只改 cursor/observation 时 revision 必须不变；`--render-history`
 的 observed path 应更新。
 
+Tree v1 的 Card 投影按每条分支组成完成的 user-led 逻辑轮：user 后至少有一条 portable
+assistant message 才把该轮写入 `messages` / `turns`。中间的 tool/event 不参与配对；一轮可有
+多条 assistant message。尾部悬空 user 与失败 assistant event 只留在 canonical tree/history，
+不推进 Card watermark；后续成功回复到达时再把完整轮一起投影。
+
 GUI/history reader 应先调用 bounded context list；统一列表可以不传 room，但每项必须保留返回的
 room/source/context，再把三者明确传给 selected render。选中读取必须包含同一 root 下 sibling
 branches，但不得带入其他 root；

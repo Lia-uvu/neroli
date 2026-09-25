@@ -60,7 +60,11 @@ supports incremental node-only delivery; every referenced parent must exist afte
 the batch, and cycles or immutable ID reuse are hard failures.
 
 Portable user/assistant nodes are projected into `messages` / `turns` for the
-existing Card engine. Shared ancestors in peer branch sessions are marked
+existing Card engine only as completed user-led logical rounds: a user must be
+followed on that branch by at least one portable assistant message. Tool/event
+nodes do not complete a round, a round may contain multiple assistant messages,
+and an unanswered user remains in the canonical tree/history without entering
+Card material. Shared ancestors in peer branch sessions are marked
 `is_context=1`; it does not count as new trigger material, but inclusive Card
 boundaries and fork context may legitimately map the same canonical node to more
 than one Card through `card_nodes`.

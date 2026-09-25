@@ -6,13 +6,6 @@ English | [中文](README.zh-CN.md)
 
 Neroli turns conversations from multiple sources into durable, time-anchored event Cards, allowing AI agents to carry context across sessions without reloading entire chat histories. It is a working systems project focused on reliable memory pipelines, multi-resolution retrieval, explicit privacy boundaries, and replaceable components.
 
-## Engineering highlights
-
-- **Durable multi-source memory.** Source adapters normalize logs from different runtimes into immutable conversation trees and ordered turns. A rolling generation pipeline turns them into narrative event Cards with time, provenance, tags, and viewer-scoped shared/private content. Cards are then organized into natural event lines, so recall can expand one topic into its complete development over time.
-- **Dual-axis retrieval.** Full-text search and chronological context form one axis; a hierarchical event graph built from embeddings, entity co-occurrence, and recursive Leiden community detection forms the other. An agent can search horizontally by keyword or time, or drill from a top-level community into one event line and walk its Card timeline.
-- **Fault-tolerant LLM pipelines.** Model output is staged and structurally validated before atomically replacing existing memory. Every physical attempt is audited independently, and malformed or empty responses preserve the last valid result.
-- **Decoupled, testable architecture.** Seven modules exchange data through a versioned SQLite contract. Background processing is source-independent, visibility filtering is centralized in storage, MCP exposes only bounded read-only operations, and **144 automated tests** protect key behavior.
-
 ## System shape
 
 ```text
@@ -49,6 +42,13 @@ Each event Card becomes a graph node. Edges combine mean-centered embedding neig
 ### Agents do not receive the primary database by default
 
 Each Card belongs to an agent workspace and separates shared from private text. By default, an agent receives viewer-filtered context or a bounded read-only retrieval interface—not the primary database. The nightly Curator also runs only inside a filtered workbench copy: invisible Cards are absent, and private fields on visible foreign Cards are blank. Search, recent context, tree snapshots, and Curator exports share the same storage-level visibility rule.
+
+## Engineering highlights
+
+- **Durable multi-source memory.** Source adapters normalize logs from different runtimes into immutable conversation trees and ordered turns. A rolling generation pipeline turns them into narrative event Cards with time, provenance, tags, and viewer-scoped shared/private content. Cards are then organized into natural event lines, so recall can expand one topic into its complete development over time.
+- **Dual-axis retrieval.** Full-text search and chronological context form one axis; a hierarchical event graph built from embeddings, entity co-occurrence, and recursive Leiden community detection forms the other. An agent can search horizontally by keyword or time, or drill from a top-level community into one event line and walk its Card timeline.
+- **Fault-tolerant LLM pipelines.** Model output is staged and structurally validated before atomically replacing existing memory. Every physical attempt is audited independently, and malformed or empty responses preserve the last valid result.
+- **Decoupled, testable architecture.** Seven modules exchange data through a versioned SQLite contract. Background processing is source-independent, visibility filtering is centralized in storage, MCP exposes only bounded read-only operations, and **147 automated tests** protect key behavior.
 
 ## Modules and tests
 

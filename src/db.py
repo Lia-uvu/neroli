@@ -173,8 +173,6 @@ def ingest_conversation_tree(
                 branch_id, newly_assigned = _assign_tree_branch(conn, node)
                 if newly_assigned:
                     changed_branches.add(branch_id)
-                if node.kind == "message":
-                    _insert_tree_message(conn, node)
             for branch_id in sorted(changed_branches):
                 _rebuild_tree_branch_turns(conn, branch_id)
         for observation in batch.observations:
@@ -470,12 +468,63 @@ def _rebuild_tree_branch_turns(conn: sqlite3.Connection, session_id: str) -> Non
         node_id = row["parent_node_id"]
     path.reverse()
 
-    round_no = 0
-    message_seq = 0
-    line_no = 0
+    # Card material is made of completed conversational rounds, not isolated
+    # portable messages. A user opens a round; one or more following assistant
+    # messages complete it. Structural events do not affect pairing, while a
+    # later user supersedes an unanswered one. The canonical tree still keeps
+    # every node for history and recovery.
+    eligible_node_ids: set[str] = set()
+    pending_user_id: str | None = None
     for node in path:
         if node["kind"] != "message":
             continue
+        if node["role"] == "user":
+            pending_user_id = node["node_id"]
+        elif node["role"] == "assistant" and pending_user_id is not None:
+            eligible_node_ids.add(pending_user_id)
+            eligible_node_ids.add(node["node_id"])
+
+    existing_turn_ids = {
+        row["source_uuid"]
+        for row in conn.execute(
+            "SELECT source_uuid FROM turns WHERE session_id = ?", (session_id,)
+        ).fetchall()
+    }
+    stale_turn_ids = existing_turn_ids - eligible_node_ids
+    if stale_turn_ids:
+        placeholders = ", ".join("?" for _ in stale_turn_ids)
+        conn.execute(
+            f"DELETE FROM turns WHERE session_id = ? AND source_uuid IN ({placeholders})",
+            (session_id, *sorted(stale_turn_ids)),
+        )
+
+    eligible_nodes = [
+        node for node in path
+        if node["kind"] == "message" and node["node_id"] in eligible_node_ids
+    ]
+    for node in eligible_nodes:
+        projected = ConversationNode(
+            node_id=node["node_id"],
+            source=node["source"],
+            room=node["room"],
+            native_node_id=node["native_node_id"],
+            parent_node_id=node["parent_node_id"],
+            native_parent_node_id=node["native_parent_node_id"],
+            occurred_at=node["occurred_at"],
+            kind=node["kind"],
+            source_type=node["source_type"],
+            role=node["role"],
+            text=node["text"],
+            message_json=node["message_json"],
+            provider=node["provider"],
+            model=node["model"],
+        )
+        _insert_tree_message(conn, projected)
+
+    round_no = 0
+    message_seq = 0
+    line_no = 0
+    for node in eligible_nodes:
         line_no += 1
         if node["role"] == "user" or round_no == 0:
             round_no += 1
@@ -501,6 +550,19 @@ def _rebuild_tree_branch_turns(conn: sqlite3.Connection, session_id: str) -> Non
                 line_no,
                 0 if node["owner_session_id"] == session_id else 1,
             ),
+        )
+
+    if stale_turn_ids:
+        placeholders = ", ".join("?" for _ in stale_turn_ids)
+        conn.execute(
+            f"""
+            DELETE FROM messages
+            WHERE source_uuid IN ({placeholders})
+              AND NOT EXISTS (
+                SELECT 1 FROM turns WHERE turns.source_uuid = messages.source_uuid
+              )
+            """,
+            tuple(sorted(stale_turn_ids)),
         )
 
 

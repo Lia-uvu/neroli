@@ -188,6 +188,88 @@ class ConversationTreeContractTest(unittest.TestCase):
         self.assertEqual(len(rendered["nodes"]), 3)
         self.assertEqual(rendered["observations"][0]["native_node_id"], "left")
 
+    def test_card_projection_waits_for_a_user_assistant_pair(self) -> None:
+        payload = envelope(cursor="root")
+        payload["nodes"] = [payload["nodes"][0]]
+        batch = self.load(payload)
+        db.ingest_conversation_tree(self.conn, batch)
+
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM conversation_nodes").fetchone()[0],
+            1,
+        )
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 0)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0], 0)
+
+        completed = envelope(cursor="left")
+        completed["nodes"] = completed["nodes"][:2]
+        db.ingest_conversation_tree(self.conn, self.load(completed))
+
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 2)
+        rows = self.conn.execute(
+            """
+            SELECT n.native_node_id, t.round, t.message_seq
+            FROM turns t JOIN conversation_nodes n ON n.node_id = t.source_uuid
+            ORDER BY t.line_no
+            """
+        ).fetchall()
+        self.assertEqual(
+            [(row["native_node_id"], row["round"], row["message_seq"]) for row in rows],
+            [("root", 1, 1), ("left", 1, 2)],
+        )
+
+    def test_structural_error_does_not_complete_a_user_turn(self) -> None:
+        payload = envelope(cursor="error")
+        payload["nodes"] = [payload["nodes"][0], {
+            "native_node_id": "error",
+            "native_parent_node_id": "root",
+            "occurred_at": "2026-08-03T11:59:01Z",
+            "kind": "event",
+            "source_type": "message:assistant-error",
+        }]
+        db.ingest_conversation_tree(self.conn, self.load(payload))
+
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM conversation_nodes").fetchone()[0], 2)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 0)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0], 0)
+
+    def test_completed_history_does_not_admit_a_failed_tail_user(self) -> None:
+        payload = envelope(cursor="error")
+        payload["nodes"] = payload["nodes"][:2] + [
+            {
+                "native_node_id": "tail-user",
+                "native_parent_node_id": "left",
+                "occurred_at": "2026-08-03T11:59:02Z",
+                "kind": "message",
+                "source_type": "message",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "unanswered"}],
+                },
+            },
+            {
+                "native_node_id": "error",
+                "native_parent_node_id": "tail-user",
+                "occurred_at": "2026-08-03T11:59:03Z",
+                "kind": "event",
+                "source_type": "message:assistant-error",
+            },
+        ]
+        db.ingest_conversation_tree(self.conn, self.load(payload))
+
+        projected = self.conn.execute(
+            """
+            SELECT n.native_node_id
+            FROM turns t JOIN conversation_nodes n ON n.node_id = t.source_uuid
+            ORDER BY t.line_no
+            """
+        ).fetchall()
+        self.assertEqual([row["native_node_id"] for row in projected], ["root", "left"])
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM conversation_nodes").fetchone()[0],
+            4,
+        )
+
     def test_fork_cards_can_both_include_the_shared_ancestor(self) -> None:
         db.ingest_conversation_tree(self.conn, self.load(envelope()))
         owner_rows = self.conn.execute(
